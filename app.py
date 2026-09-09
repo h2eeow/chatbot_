@@ -69,7 +69,15 @@ def handle_message(event):
     # [규칙 3] 텍스트만 전송
     elif "영업시간" in user_text:
         reply_messages.append(TextMessage(text="⏰ 영업시간 안내\n- 평일: 09:00 ~ 18:00\n- 주말/공휴일: 휴무"))
+    
+    # [규칙 3] 텍스트만 전송
+    elif "ㅁㄴ" in user_text:
+        reply_messages.append(StickerMessage(package_id="11537", sticker_id="52002734"))
+        reply_messages.append(StickerMessage(package_id="11537", sticker_id="52002734"))
+        reply_messages.append(StickerMessage(package_id="11537", sticker_id="52002734"))
+        reply_messages.append(StickerMessage(package_id="11537", sticker_id="52002734"))
 
+    
     # [기타] 등록되지 않은 키워드가 입력되었을 때
     else:
         reply_messages.append(TextMessage(text="👉 [안녕], [위치], [영업시간]을 입력해 보세요!"))
