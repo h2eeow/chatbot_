@@ -85,7 +85,7 @@ def handle_message(event):
 
     
     # [기타] 등록되지 않은 키워드가 입력되었을 때
-    else:
+#    else:
 
     # 라인 서버로 답장 보내기
     with ApiClient(configuration) as api_client:
