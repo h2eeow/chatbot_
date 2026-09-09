@@ -59,7 +59,6 @@ def handle_message(event):
 
     # [규칙 1] 텍스트 + 이모티콘(스티커) 함께 전송
     if "/ㅁㅅ" in user_text:
-        reply_messages.append(TextMessage(text="미션방법
 
 
         reply_messages.append(StickerMessage(package_id="11537", sticker_id="52002734"))  # 스티커 추가
