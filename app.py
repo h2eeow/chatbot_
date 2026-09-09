@@ -57,6 +57,29 @@ def handle_message(event):
         reply_messages.append(TextMessage(text="안녕하세요! 무엇을 도와드릴까요?"))  # 텍스트 추가
         reply_messages.append(StickerMessage(package_id="11537", sticker_id="52002734"))  # 스티커 추가
 
+    # [규칙 1] 텍스트 + 이모티콘(스티커) 함께 전송
+    if "/ㅁㅅ" in user_text:
+        reply_messages.append(TextMessage(text="미션방법
+
+🛸 노미클남자 미션
+• 매일 기본 30마디 이상 활동.ᐟ 
+• 미션기간 1주동안 최소 여자 1명 초대
+• 초대한 여자분 적응기간 3일 후 미클 
+  
+• 1주후 여자초대 못할 경우 
+    운영자 판단하에 기간연장
+• 노미클남자 선갠라 불가능
+⤷ 단, 본인이 초대한 여자분에 한해서는
+  적응 및 원활한 소통을 위해 선갠라 가능
+
+💃 여자미션
+• 매일 기본 30마디 이상 활동.ᐟ 
+• 방 입장하자마자 미션클리어
+• 선갠라 가능 ( 노미클자갠라X )
+
+궁금한 거 있으실까요?"))  # 텍스트 추가
+        reply_messages.append(StickerMessage(package_id="11537", sticker_id="52002734"))  # 스티커 추가
+    
     # [규칙 2] 텍스트 + 이미지 함께 전송
     elif "위치" in user_text or "약도" in user_text:
         reply_messages.append(TextMessage(text="📍 저희 매장 오시는 길 위치 안내입니다."))  # 텍스트 추가
