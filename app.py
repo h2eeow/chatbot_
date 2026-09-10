@@ -198,7 +198,7 @@ def handle_message(event):
 
 
 ############################################################################
-    # 명령어 1: /ㅁㄷㅅ [숫자] (닉네임만 표시)
+    # 명령어: /ㅁㄷㅅ [숫자] (횟수 및 글자 수 상세 표시)
     elif re.match(r"^/ㅁㄷㅅ\s+\d+$", user_text):
         if "🎪" not in user_nickname:
             reply_messages.append(TextMessage(text=f"⚠️ 권한이 없습니다. (인식된 닉네임: {user_nickname})"))
@@ -208,39 +208,22 @@ def handle_message(event):
             bottom_users = get_ranked_users(limit=n, order="ASC")
 
             if top_users:
-                msg = f"🏆 소통왕 (상위 {n}명)\n"
-                for idx, (nick, _, _) in enumerate(top_users, 1):
-                    msg += f"{idx}위: {nick}\n"
+                medals = ["🥇", "🥈", "🥉"]
 
-                msg += "\n"
-
-                msg += f"💤 조용한 사람 (하위 {n}명)\n"
-                for idx, (nick, _, _) in enumerate(bottom_users, 1):
-                    msg += f"{idx}위: {nick}\n"
-
-                reply_messages.append(TextMessage(text=msg.strip()))
-            else:
-                reply_messages.append(TextMessage(text="오늘 집계된 기록이 없습니다."))
-
-    # 명령어 2: /마딧수 [숫자] (횟수 및 글자 수까지 상세 표시)
-    elif re.match(r"^/마딧수\s+\d+$", user_text):
-        if "🎪" not in user_nickname:
-            #reply_messages.append(TextMessage(text=f"⚠️ 권한이 없습니다. (인식된 닉네임: {user_nickname})"))
-        else:
-            n = int(user_text.split()[1])
-            top_users = get_ranked_users(limit=n, order="DESC")
-            bottom_users = get_ranked_users(limit=n, order="ASC")
-
-            if top_users:
-                msg = f"🏆 소통왕 (상위 {n}명)\n"
+                # 1. 상위 유저 출력
+                msg = f"🏆 소통왕 (상위 {n}명)\n\n"
                 for idx, (nick, count, length) in enumerate(top_users, 1):
-                    msg += f"{idx}위: {nick} - {count}회 ({length}자)\n"
+                    display_nick = nick[1:] if len(nick) > 1 else nick
+                    rank_prefix = medals[idx - 1] if idx <= 3 else f"{idx}위"
+                    msg += f"{rank_prefix} {display_nick}\n💬 {count}개 · ✏️ {length}자\n\n"
 
-                msg += "\n"
+                msg += "───────────────────\n\n"
 
-                msg += f"💤 조용한 사람 (하위 {n}명)\n"
+                # 2. 하위 유저 출력 (해골 이모지 적용)
+                msg += f"💤 조용한 사람 (하위 {n}명)\n\n"
                 for idx, (nick, count, length) in enumerate(bottom_users, 1):
-                    msg += f"{idx}위: {nick} - {count}회 ({length}자)\n"
+                    display_nick = nick[1:] if len(nick) > 1 else nick
+                    msg += f"💤 {idx}위 {display_nick}\n💬 {count}개 · ✏️ {length}자\n\n"
 
                 reply_messages.append(TextMessage(text=msg.strip()))
             else:
