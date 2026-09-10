@@ -37,12 +37,13 @@ from linebot.v3.webhooks import (
 from apscheduler.schedulers.background import BackgroundScheduler  # 자정(00:00 KST) 데이터 정제용
 
 # ==============================================================================
-# 2. Flask 서버 및 LINE API 설정
+# 2. Flask 서버 및 LINE API / ImgBB 설정
 # ==============================================================================
 app = Flask(__name__)
 
 CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
 CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
+IMGBB_API_KEY = os.environ.get('IMGBB_API_KEY')
 
 configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
@@ -53,6 +54,7 @@ handler = WebhookHandler(CHANNEL_SECRET)
 def init_db():
     conn = sqlite3.connect('chat_stats.db')
     cursor = conn.cursor()
+    # 1) 유저 통계 테이블
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS user_stats (
             user_id TEXT PRIMARY KEY,
@@ -60,6 +62,20 @@ def init_db():
             msg_count INTEGER DEFAULT 0,
             talk_length INTEGER DEFAULT 0,
             last_active DATETIME
+        )
+    ''')
+    # 2) 이미지 저장용 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS bot_images (
+            keyword TEXT PRIMARY KEY,
+            image_url TEXT
+        )
+    ''')
+    # 3) 이미지 등록 대기 상태 저장용 테이블 (Render 멀티프로세스 환경용)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS pending_uploads (
+            user_id TEXT PRIMARY KEY,
+            keyword TEXT
         )
     ''')
     conn.commit()
@@ -168,7 +184,7 @@ def handle_member_left(event):
     conn.commit()
     conn.close()
 
-# ③ 메시지 수신 및 자동응답 처리
+# ③ 텍스트 메시지 수신 및 자동응답 처리
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     user_text = event.message.text.strip()
@@ -193,88 +209,20 @@ def handle_message(event):
     except Exception as e:
         print(f"프로필 스캔 실패: {e}")
 
-    # 2. 누구나 말하면 DB에 닉네임 저장, 카운트+1, 입력한 글자 수 누적(+=)
+    # 2. 활동 카운트 업데이트
     current_text_len = len(user_text)
     update_user_activity(user_id, user_nickname, current_text_len)
 
-#####여기부터 시작 #######################################################################
-    if user_text == "안녕하이소":
-        reply_messages.append(TextMessage(text="안녕하세요! 무엇을 도와드릴까요?"))
-        reply_messages.append(StickerMessage(package_id="11537", sticker_id="52002734"))
-
-
-
-
-######마딧수 명령어######################################################################
-    # 명령어: /ㅁㄷㅅ [숫자] (횟수 및 글자 수 상세 표시)
-    elif re.match(r"^/ㅁㄷㅅ\s+\d+$", user_text):
-        if "🎪" not in user_nickname:
-            reply_messages.append(TextMessage(text=f"⚠️ 권한이 없습니다. (인식된 닉네임: {user_nickname})"))
-        else:
-            n = int(user_text.split()[1])
-            top_users = get_ranked_users(limit=n, order="DESC")
-            bottom_users = get_ranked_users(limit=n, order="ASC")
-
-            if top_users:
-                medals = ["🥇", "🥈", "🥉"]
-
-                # 1. 상위 유저 출력
-                msg = f"🏆 소통왕 (상위 {n}명)\n\n"
-                for idx, (nick, count, length) in enumerate(top_users, 1):
-                    display_nick = nick[1:] if len(nick) > 1 else nick
-                    rank_prefix = medals[idx - 1] if idx <= 3 else f"{idx}위"
-                    msg += f"{rank_prefix} {display_nick}\n💬 {count}개 · ✏️ {length}자\n\n"
-
-                msg += "───────────────────\n\n"
-
-                # 2. 하위 유저 출력 (해골 이모지 적용)
-                msg += f"💤 조용한 사람 (하위 {n}명)\n\n"
-                for idx, (nick, count, length) in enumerate(bottom_users, 1):
-                    display_nick = nick[1:] if len(nick) > 1 else nick
-                    msg += f"💤 {idx}위 {display_nick}\n💬 {count}개 · ✏️ {length}자\n\n"
-
-                reply_messages.append(TextMessage(text=msg.strip()))
-            else:
-                reply_messages.append(TextMessage(text="오늘 집계된 기록이 없습니다."))
-
-##########주사위 #######################################################################################
-    # 1) /ㅈㅅㅇ (단독 입력 시: 1~6 무작위 추출)
-    elif user_text == "/ㅈㅅㅇ":
-        dice_num = random.randint(1, 6)
-        reply_messages.append(TextMessage(text=f"🎲 주사위 결과: {dice_num}"))
-
-    # 2) /ㅈㅅㅇ [숫자] (지정한 범위: 1~N 무작위 추출)
-    elif re.match(r"^/ㅈㅅㅇ\s+\d+$", user_text):
-        max_num = int(user_text.split()[1])
-        if max_num < 1:
-            reply_messages.append(TextMessage(text="⚠️ 1 이상의 숫자를 입력해주세요!"))
-        else:
-            dice_num = random.randint(1, max_num)
-            reply_messages.append(TextMessage(text=f"🎲 주사위 결과: {dice_num} (1~{max_num})"))
-
- ###################################################################################################   
-    # 4. 답장 메시지 전송
-    if reply_messages:
-        with ApiClient(configuration) as api_client:
-            line_bot_api = MessagingApi(api_client)
-            line_bot_api.reply_message(
-                ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=reply_messages
-                )
-            )
-###################################################################################################################
-    # --------------------------------------------------------------------------
-    # 1. 이미지 키워드 단독 입력 시 즉시 전송
-    # --------------------------------------------------------------------------
+    # 3. 이미지 키워드 단독 입력 체킹 (DB 조회)
     conn = sqlite3.connect('chat_stats.db')
     cursor = conn.cursor()
     cursor.execute("SELECT image_url FROM bot_images WHERE keyword = ?", (user_text,))
-    row = cursor.fetchone()
+    img_row = cursor.fetchone()
     conn.close()
 
-    if row:
-        image_url = row[0]
+    # ① 등록된 이미지 키워드와 정확히 일치 시
+    if img_row:
+        image_url = img_row[0]
         reply_messages.append(
             ImageMessage(
                 originalContentUrl=image_url,
@@ -282,9 +230,12 @@ def handle_message(event):
             )
         )
 
-    # --------------------------------------------------------------------------
-    # 2. /이미지등록 [키워드] (🎪 이모지 권한 필요)
-    # --------------------------------------------------------------------------
+    # ② 인사 테스트
+    elif user_text == "안녕하이소":
+        reply_messages.append(TextMessage(text="안녕하세요! 무엇을 도와드릴까요?"))
+        reply_messages.append(StickerMessage(package_id="11537", sticker_id="52002734"))
+
+    # ③ /이미지등록 [키워드] (🎪 권한 필요)
     elif user_text.startswith("/이미지등록 "):
         if "🎪" not in user_nickname:
             reply_messages.append(TextMessage(text=f"⚠️ 권한이 없습니다. (인식된 닉네임: {user_nickname})"))
@@ -293,12 +244,17 @@ def handle_message(event):
             if not keyword:
                 reply_messages.append(TextMessage(text="⚠️ 키워드를 입력해주세요. (예: /이미지등록 강아지)"))
             else:
-                PENDING_KEYWORD = keyword
+                conn = sqlite3.connect('chat_stats.db')
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO pending_uploads (user_id, keyword) VALUES (?, ?)
+                    ON CONFLICT(user_id) DO UPDATE SET keyword = excluded.keyword
+                ''', (user_id, keyword))
+                conn.commit()
+                conn.close()
                 reply_messages.append(TextMessage(text=f"📸 '{keyword}' 키워드로 저장할 이미지를 지금 바로 올려주세요!"))
 
-    # --------------------------------------------------------------------------
-    # 3. /이미지삭제 [키워드] (🎪 이모지 권한 필요)
-    # --------------------------------------------------------------------------
+    # ④ /이미지삭제 [키워드] (🎪 권한 필요)
     elif user_text.startswith("/이미지삭제 "):
         if "🎪" not in user_nickname:
             reply_messages.append(TextMessage(text=f"⚠️ 권한이 없습니다. (인식된 닉네임: {user_nickname})"))
@@ -309,25 +265,9 @@ def handle_message(event):
             else:
                 conn = sqlite3.connect('chat_stats.db')
                 cursor = conn.cursor()
-                
-                # 1) 해당 키워드가 존재하는지 확인
                 cursor.execute("SELECT keyword FROM bot_images WHERE keyword = ?", (keyword,))
                 exists = cursor.fetchone()
                 
                 if exists:
-                    # 2) DB에서 레코드 삭제
                     cursor.execute("DELETE FROM bot_images WHERE keyword = ?", (keyword,))
-                    conn.commit()
-                    reply_messages.append(TextMessage(text=f"🗑️ '{keyword}' 키워드의 이미지가 성공적으로 삭제되었습니다."))
-                else:
-                    reply_messages.append(TextMessage(text=f"⚠️ '{keyword}' 키워드로 등록된 이미지가 없습니다."))
-                
-                conn.close()
-
-
-# ==============================================================================
-# 6. 서버 실행
-# ==============================================================================
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+                    conn.com
