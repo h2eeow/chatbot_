@@ -404,7 +404,7 @@ ex) 셀카(눈 빼고 모자이크 가능), 몸사진(손, 가슴, 팔, 다리 �
 
 ####################################################################################################################
 
-    # 명령어 2: /ㅁㄷㅅ (횟수 및 글자 수 상세 표시)
+    # 명령어 : /ㅁㄷㅅ (횟수 및 글자 수 상세 표시)
     elif re.match(r"^/ㅁㄷㅅ$", user_text):
         if "🎪" not in user_nickname:
             reply_messages.append(TextMessage(text=f"⚠️ 권한이 없습니다. (인식된 닉네임: {user_nickname})"))
@@ -465,7 +465,25 @@ ex) 셀카(눈 빼고 모자이크 가능), 몸사진(손, 가슴, 팔, 다리 �
                 reply_messages.append(TextMessage(text=msg.strip()))
             else:
                 reply_messages.append(TextMessage(text="오늘 집계된 기록이 없습니다."))
+                
+    # --------------------------------------------------------------------------
+    # /내기록 (자신의 메시지 수 및 총 글자 수 확인)
+    # --------------------------------------------------------------------------
+    elif user_text == "/내기록":
+        conn = sqlite3.connect('chat_stats.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT msg_count, text_len FROM user_stats WHERE user_id = ?", (user_id,))
+        row = cursor.fetchone()
+        conn.close()
 
+        if row:
+            msg_count, text_len = row
+            reply_messages.append(
+                TextMessage(text=f"📊 {user_nickname}님의 소통 기록\n\n💬: {msg_count}개\n✏️: {text_len}자")
+            )
+        else:
+            reply_messages.append(TextMessage(text=" 아직 집계된 기록이 없습니다."))
+    
 
 ##############################################################################################
     # 4. 답장 메시지 전송
