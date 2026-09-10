@@ -20,7 +20,7 @@ from linebot.v3.messaging import (
     StickerMessage
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
-from apscheduler.schedulers.background import BackgroundScheduler  # 모듈 추가
+from apscheduler.schedulers.background import BackgroundScheduler  # 자정 리셋 스케줄러
 
 # ==============================================================================
 # 2. Flask 서버 및 LINE API 설정
@@ -28,14 +28,14 @@ from apscheduler.schedulers.background import BackgroundScheduler  # 모듈 추�
 app = Flask(__name__)  # Flask 웹 서버 객체 생성
 
 # Render 환경변수에서 라인 키 값 로드
-CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')  # 액세스 토큰
-CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')              # 시크릿 키
+CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
+CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
 
-configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)  # API 토큰 설정
-handler = WebhookHandler(CHANNEL_SECRET)                          # 서명 검증기 설정
+configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
+handler = WebhookHandler(CHANNEL_SECRET)
 
 # ==============================================================================
-# 3. 데이터베이스 함수 정의
+# 3. 데이터베이스 및 스케줄러 설정
 # ==============================================================================
 def init_db():
     conn = sqlite3.connect('chat_stats.db')
@@ -60,8 +60,6 @@ def update_user_activity(user_id, nickname, text_len):
     conn = sqlite3.connect('chat_stats.db')
     cursor = conn.cursor()
     
-    # 신규 등록 시: msg_count = 1, talk_length = text_len
-    # 기존 유저일 시: msg_count + 1, talk_length + text_len
     cursor.execute('''
         INSERT INTO user_stats (user_id, nickname, msg_count, talk_length, last_active)
         VALUES (?, ?, 1, ?, ?)
@@ -91,6 +89,37 @@ def get_ranked_users(limit=5, order="DESC"):
     conn.close()
     return results
 
+def clear_db():
+    """매일 자정(00:00 KST)에 유저 통계 초기화"""
+    conn = sqlite3.connect('chat_stats.db')
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM user_stats')
+    conn.commit()
+    conn.close()
+    print("🧹 [자정 정제 완료] user_stats 테이블이 초기화되었습니다.")
+
+# 한국 시간(Asia/Seoul) 기준 매일 자정 00:00 리셋 스케줄러 실행
+scheduler = BackgroundScheduler(daemon=True, timezone="Asia/Seoul")
+scheduler.add_job(clear_db, 'cron', hour=0, minute=0)
+scheduler.start()
+
+# ==============================================================================
+# 4. LINE 웹훅 수신 경로 (/callback)
+# ==============================================================================
+@app.route("/callback", methods=['POST'])
+def callback():
+    signature = request.headers.get('X-Line-Signature')
+    body = request.get_data(as_text=True)
+
+    try:
+        handler.handle(body, signature)
+    except InvalidSignatureError:
+        abort(400)
+    return 'OK'
+
+# ==============================================================================
+# 5. 메시지 이벤트 통합 처리
+# ==============================================================================
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     user_text = event.message.text.strip()
@@ -119,201 +148,23 @@ def handle_message(event):
     current_text_len = len(user_text)
     update_user_activity(user_id, user_nickname, current_text_len)
 
-
-
-def clear_db():
-    """매일 자정에 호출되어 유저 통계를 초기화하는 함수"""
-    conn = sqlite3.connect('chat_stats.db')
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM user_stats')  # 또는 DROP TABLE user_stats 후 init_db()
-    conn.commit()
-    conn.close()
-    print("🧹 [자정 정제 완료] user_stats 테이블 초기화됨.")
-
-# 자정 스케줄러 설정 (매일 00:00 실행)
-scheduler = BackgroundScheduler(daemon=True)
-scheduler.add_job(clear_db, 'cron', hour=0, minute=0)
-scheduler.start()
-
-
-# ==============================================================================
-# 4. LINE 웹훅 수신 경로 (/callback)
-# ==============================================================================
-@app.route("/callback", methods=['POST'])
-def callback():
-    signature = request.headers.get('X-Line-Signature')  # 라인이 보낸 보안 서명 추출
-    body = request.get_data(as_text=True)                 # 수신된 메시지 데이터 텍스트 변환
-
-    try:
-        handler.handle(body, signature)  # 서명 검증 후 메시지 이벤트 핸들러로 전달
-    except InvalidSignatureError:
-        abort(400)  # 서명이 유효하지 않으면 400 에러 반환
-    return 'OK'     # 라인 서버에 정상 수신 알림
-
-# ==============================================================================
-# 5. 키워드별 자동응답 메시지 처리
-# ==============================================================================
-@handler.add(MessageEvent, message=TextMessageContent)
-def handle_message(event):
-    user_text = event.message.text.strip()  # 유저가 입력한 텍스트 (공백 제거)
-    reply_messages = []                     # 전송할 메시지 목록 (최대 5개 가능)
-
-    # [규칙 1] 텍스트 + 이모티콘(스티커) 함께 전송
+    # --------------------------------------------------
+    # 3. 키워드 응답 및 명령어 처리
+    # --------------------------------------------------
+    # [규칙 1] 텍스트 + 스티커
     if user_text == "안녕하이소":
-        reply_messages.append(TextMessage(text="안녕하세요! 무엇을 도와드릴까요?"))  # 텍스트 추가
-        reply_messages.append(StickerMessage(package_id="11537", sticker_id="52002734"))  # 스티커 추가
-    
-    # [규칙 2] 텍스트 + 이미지 함께 전송
-    elif user_text =='도리뚱띠':
-        reply_messages.append(TextMessage(text="📍 저희 매장 오시는 길 위치 안내입니다."))  # 텍스트 추가
-        sample_map_url = "https://images.unsplash.com/photo-1526778548025-fa2f459cd5c1"   # 이미지 HTTPS URL
-        reply_messages.append(ImageMessage(
-            original_content_url=sample_map_url,  # 원본 이미지 URL
-            preview_image_url=sample_map_url      # 미리보기 이미지 URL
-        ))
-
-    
-    # [규칙 3] 텍스트만 전송
-    elif user_text == "ㅁㄴ":
-        reply_messages.append(StickerMessage(package_id="11537", sticker_id="52002734"))
-        reply_messages.append(StickerMessage(package_id="11537", sticker_id="52002734"))
-        reply_messages.append(StickerMessage(package_id="11537", sticker_id="52002734"))
+        reply_messages.append(TextMessage(text="안녕하세요! 무엇을 도와드릴까요?"))
         reply_messages.append(StickerMessage(package_id="11537", sticker_id="52002734"))
 
-    
-    elif user_text == "/1":
-        reply_messages.append(TextMessage(text="""반갑습니다.
-문의 주신 방은 🎪 𝑴𝒊𝒅𝒏𝒊𝒈𝒉𝒕 𝑪𝒊𝒓𝒄𝒖𝒔 입니다! 
-
-닉네임(2글자) : 
-나이(만나이x) : 
-지역(서울은 구까지) : 
-성별 : 
-군필/미필:
-기/미/돌:
-전방(이름 or 이모티콘) :
-
-복사 붙여넣기 하신 뒤 작성 후 제출 부탁드립니다!
-"""))  # 텍스트 추가
-
-    elif user_text == "/2":
-        reply_messages.append(TextMessage(text="""영통 인증으로 받고있어서 
-가능하시면 말씀해 주세요 💖
-
-필터는 밀가루or토끼 변형되지 않는걸로 부탁드리겠습니다!!
-
-영통으로 닉네임 말씀해 주시면 됩니다!!
-"""))  # 텍스트 추가
-
-    elif user_text == "/3":
-        reply_messages.append(TextMessage(text="""💡야단라(야방)란 야한 단체
-    라인(야한채팅방)입니다.
-
-• 야한 얘기도하고 본인
-    성향에따라 사진, 영상
-    공유하고 미클자분과 벙으로
-    놀고, 먹고, 관계도하는
-    그런곳입니다.
-
-• 본인 사진, 영상은 괜찮지만
-    타인이 찍혀있는 사진, 영상
-    올리실때는 동의 후
-    올려주세요~
-
-• 다른분들 사진, 영상 캡쳐 및
-    다운로드시 법적 처벌
-    받으세요~
-"""))  # 텍스트 추가
-
-    elif user_text == "/4":
-        reply_messages.append(TextMessage(text="""🎪 프로필 설정 💫
-
-- 프로필 사진은 '본인의 신체 일부'가 나온 사진으로 설정 필수
-
-ex) 셀카(눈 빼고 모자이크 가능), 몸사진(손, 가슴, 팔, 다리 등등), 전신사진(앞•뒷모습)
-
-²³ ²⁴ ²⁵ ²⁶ ²⁷ ²⁸ ²⁹ ³⁰ ³¹ ³² ³³ ³⁴ ³⁵ ³⁶ ³⁷ ³⁸
-
-여자: 💃이름²³
-남자: 🛸이름²⁸
-"""))  # 텍스트 추가
-
-    elif user_text == "/5":
-        reply_messages.append(TextMessage(text="""미션방법
-
-🛸 노미클남자 미션
-• 매일 기본 30마디 이상 활동.ᐟ 
-• 미션기간 1주동안 최소 여자 1명 초대
-• 초대한 여자분 적응기간 3일 후 미클 
-  
-• 1주후 여자초대 못할 경우 
-    운영자 판단하에 기간 연장
-• 노미클남자 선갠라 불가능
-⤷ 단, 본인이 초대한 여자분에 한해서는
-  적응 및 원활한 소통을 위해 선갠라 가능
-
-💃 여자미션
-• 매일 기본 30마디 이상 활동.ᐟ 
-• 방 입장하자마자 미션클리어
-• 선갠라 가능 ( 노미클자 갠라X )
-
-궁금한 거 있으실까요?
-"""))  # 텍스트 추가
-
-    elif user_text == "/ㅁㄹㅇ":
-        reply_messages.append(TextMessage(text="""/ㅇㅅ : 인사
-/ㅊㄷ : 초대 멘트
-/남초 : 남자 초대
-/여초: 여자 초대
-/ㅎㅂ : 홍보 {블스/트위터(x)/오픈채팅} 어플 {수다/킹톡/다톡등등}
-ㅁㄴ : 현생 사람들을 배려하기 위한 매너봉"""))  # 텍스트 추가
-
-    elif user_text == "/ㅊㄷ":
-        reply_messages.append(TextMessage(text="""초대 있을 시
-@🎪@🎠@💫  멘션후 
-여초/남초/동반 있어요 
-
-위 양식대로 채팅 주시면 운영진들이 인증방 초대해드릴게요~!"""))  # 텍스트 추가
-
-    elif user_text == "/ㅋㅊ":
-        reply_messages.append(TextMessage(text="""활동 부족으로 밖으로 모시겠습니다!
-
-같이 지내주셔서 감사했고 다음에 또 저희
-🎪 𝑴𝒊𝒅𝒏𝒊𝒈𝒉𝒕 𝑪𝒊𝒓𝒄𝒖𝒔 💫 를 찾아주신다면 반갑게 맞이할게요
-
-즐거운 야방 생활 되세용 🫶"""))  # 텍스트 추가
-
-    elif user_text == "/ㅇㅅ":
-        reply_messages.append(TextMessage(text="""🎪 𝑴𝒊𝒅𝒏𝒊𝒈𝒉𝒕 𝑪𝒊𝒓𝒄𝒖𝒔 💫 에 오신걸 환영합니다
-
-오른쪽 상단 ≡ 버튼 누르시고
-노트 → 족보, 자기소개서 댓글 작성 후
-공지사항 숙지 부탁드립니다!"""))  # 텍스트 추가
-
-
-#   elif user_text == "ㅁ":
-#      reply_messages.append(TextMessage(text="""ㅁ"""))  # 텍스트 추가
-
-
-
-
-
-
-
-
-#############################################################################################################################
-
-    # --------------------------------------------------
     # [/ㅁㄷㅅ 숫자] 명령어 처리
-    # --------------------------------------------------
-    if re.match(r"^/ㅁㄷㅅ\s+\d+$", user_text):
+    elif re.match(r"^/ㅁㄷㅅ\s+\d+$", user_text):
         if "🎪" not in user_nickname:
             reply_messages.append(TextMessage(text=f"⚠️ 권한이 없습니다. (인식된 닉네임: {user_nickname})"))
         else:
             n = int(user_text.split()[1])
 
             top_users = get_ranked_users(limit=n, order="DESC")
-            bottom_users = get_bottom_users(limit=n, order="ASC") # get_ranked_users(limit=n, order="ASC") 사용 가능
+            bottom_users = get_ranked_users(limit=n, order="ASC")
 
             if top_users:
                 msg = f"🏆 소통왕 (상위 {n}명)\n"
@@ -328,26 +179,24 @@ ex) 셀카(눈 빼고 모자이크 가능), 몸사진(손, 가슴, 팔, 다리 �
 
                 reply_messages.append(TextMessage(text=msg.strip()))
             else:
-                reply_messages.append(TextMessage(text="집계된 기록이 없습니다."))
+                reply_messages.append(TextMessage(text="오늘 집계된 기록이 없습니다."))
 
-
-
-###############################################################################################################
-    
-    # 라인 서버로 답장 보내기
-    with ApiClient(configuration) as api_client:
-        line_bot_api = MessagingApi(api_client)  # API 클라이언트 생성
-        line_bot_api.reply_message(
-            ReplyMessageRequest(
-                reply_token=event.reply_token,  # 일회성 답장 토큰
-                messages=reply_messages         # 응답할 메시지 배열
+    # --------------------------------------------------
+    # 4. 답장 메시지 전송 (응답할 메시지가 있을 때만 전송)
+    # --------------------------------------------------
+    if reply_messages:
+        with ApiClient(configuration) as api_client:
+            line_bot_api = MessagingApi(api_client)
+            line_bot_api.reply_message(
+                ReplyMessageRequest(
+                    reply_token=event.reply_token,
+                    messages=reply_messages
+                )
             )
-        )
-
 
 # ==============================================================================
-# 5. 서버 실행
+# 6. 서버 실행
 # ==============================================================================
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))  # 외부 포트 지정 (기본 5000)
-    app.run(host="0.0.0.0", port=port)        # 모든 IP에 대해 서버 실행
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
