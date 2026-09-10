@@ -4,6 +4,7 @@
 import os                                  # 서버 환경변수(LINE API 키 등) 로드용
 import re                                  # 정규표현식 명령어 파싱용
 import sqlite3                             # DB 연동 및 카운트/글자 수 집계용
+import random
 from datetime import datetime              # 최근 활동 시간(last_active) 기록용
 from flask import Flask, request, abort   # 웹 서버 구축 및 라인 웹훅 수신용
 
