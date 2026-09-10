@@ -20,7 +20,6 @@ from linebot.v3.messaging import (
     StickerMessage
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
-
 from apscheduler.schedulers.background import BackgroundScheduler  # 모듈 추가
 
 # ==============================================================================
