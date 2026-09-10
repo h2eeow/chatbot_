@@ -262,37 +262,52 @@ ex) 셀카(눈 빼고 모자이크 가능), 몸사진(손, 가슴, 팔, 다리 �
 
 #############################################################################################################################
 
-        # [/ㅁㄷㅅ 숫자] 형태 명령어 처리
+         # [/ㅁㄷㅅ 숫자] 형태 명령어 처리
+    elif re.match(r"^/ㅁㄷㅅ\s+\d+$", user_text):
         user_nickname = "사용자"
-        error_log = ""
-        
         try:
             with ApiClient(configuration) as api_client:
                 line_bot_api = MessagingApi(api_client)
                 
+                # 그룹방 / 1:1 대화 분기 처리
                 if event.source.type == "group":
                     try:
                         profile = line_bot_api.get_group_member_profile(event.source.group_id, user_id)
                         user_nickname = profile.display_name
-                    except Exception as ge:
-                        error_log += f"[그룹조회실패: {ge}] "
-                        # 그룹 실패시 일반 프로필 시도
+                    except Exception:
                         profile = line_bot_api.get_profile(user_id)
                         user_nickname = profile.display_name
                 else:
                     profile = line_bot_api.get_profile(user_id)
                     user_nickname = profile.display_name
-
         except Exception as e:
-            error_log += f"[최종실패: {e}]"
+            print(f"프로필 조회 실패: {e}")
 
-        # 디버깅용 메시지 출력 (테스트 후 원상복구)
-        if "🎪" not in user_nickname:
-            reply_messages.append(TextMessage(text=f"⚠️ 인식된 닉네임: {user_nickname}\n에러로그: {error_log}"))
+        # 🎪 이모지 권한 확인
+        if "🎪" in user_nickname:
+            # 💡 테스트용: 권한 거부 시 현재 인식된 닉네임을 출력해서 알려줌
+            reply_messages.append(TextMessage(text=f"⚠️ 권한 없음 (인식된 닉네임: {user_nickname})"))
+        else:
+            n = int(user_text.split()[1])
+            top_users = get_top_users(limit=n)
+            bottom_users = get_bottom_users(limit=n)
 
+            if top_users:
+                msg = f"🏆 최근 24시간 소통왕 (상위 {n}명)\n"
+                for idx, (u_id, count) in enumerate(top_users, 1):
+                    masked_id = u_id[:6] + "..."
+                    msg += f"{idx}위: {masked_id} - {count}회\n"
 
+                msg += "\n"
 
-    
+                msg += f"💤 최근 24시간 조용한 사람 (하위 {n}명)\n"
+                for idx, (u_id, count) in enumerate(bottom_users, 1):
+                    masked_id = u_id[:6] + "..."
+                    msg += f"{idx}위: {masked_id} - {count}회\n"
+
+                reply_messages.append(TextMessage(text=msg.strip()))
+            else:
+                reply_messages.append(TextMessage(text="최근 24시간 동안 집계된 메시지 기록이 없습니다."))
     
 
 ###############################################################################################################
