@@ -497,7 +497,7 @@ ex) 셀카(눈 빼고 모자이크 가능), 몸사진(손, 가슴, 팔, 다리 �
        # --------------------------------------------------------------------------
     # /내기록 (자신의 메시지 수 및 총 글자 수 확인)
     # --------------------------------------------------------------------------
-    elif user_text == "/내마딧수":
+    elif user_text == "/내마딧수" or "/ㄴㅁㄷㅅ":
         conn = sqlite3.connect('chat_stats.db')
         cursor = conn.cursor()
         
@@ -521,9 +521,9 @@ ex) 셀카(눈 빼고 모자이크 가능), 몸사진(손, 가슴, 팔, 다리 �
 
 ##############################################################################################
     # --------------------------------------------------------------------------
-    # /주간평균50 (이번 주 일평균 메시지 50회 미만 유저 목록)
+    # /주간비활 (이번 주 실시간 일평균 메시지 50회 미만 유저 목록)
     # --------------------------------------------------------------------------
-    elif user_text == "/주간평균50":
+    elif user_text == "/ㅈㄱㅂㅎ" or "/주간비활":
         if "🎪" not in user_nickname:
             reply_messages.append(TextMessage(text=f"⚠️ 권한이 없습니다. (인식된 닉네임: {user_nickname})"))
         else:
@@ -532,36 +532,45 @@ ex) 셀카(눈 빼고 모자이크 가능), 몸사진(손, 가슴, 팔, 다리 �
 
             conn = sqlite3.connect('chat_stats.db')
             cursor = conn.cursor()
-            # 주간 누적 메시지를 경과 일수로 나눈 '일평균'이 50 미만인 유저 오름차순 정렬
+            
+            # 주간 DB와 일간 DB의 msg_count, talk_length를 합산하여 조회
             cursor.execute('''
-                SELECT nickname, msg_count, talk_length 
-                FROM weekly_user_stats 
-                WHERE (CAST(msg_count AS REAL) / ?) < 50
-                ORDER BY msg_count ASC, talk_length ASC
-            ''', (days_passed,))
-            low_avg_users = cursor.fetchall()
+                SELECT 
+                    COALESCE(w.nickname, u.nickname) AS nickname,
+                    COALESCE(w.msg_count, 0) + COALESCE(u.msg_count, 0) AS total_msg,
+                    COALESCE(w.talk_length, 0) + COALESCE(u.talk_length, 0) AS total_len
+                FROM user_stats u
+                LEFT JOIN weekly_user_stats w ON u.user_id = w.user_id
+                ORDER BY total_msg ASC, total_len ASC
+            ''')
+            all_users = cursor.fetchall()
             conn.close()
+
+            # 실시간 합산된 일평균 50회 미만 유저 추출
+            low_avg_users = []
+            for nick, total_count, total_length in all_users:
+                avg_count = total_count / days_passed
+                if avg_count < 50:
+                    low_avg_users.append((nick, total_count, total_length, avg_count))
 
             if low_avg_users:
                 msg = f"📉 주간 일평균 50회 미만 유저 ({days_passed}일차 기준 / {len(low_avg_users)}명)\n\n"
-                for idx, (nick, count, length) in enumerate(low_avg_users, 1):
+                for idx, (nick, total_count, total_length, avg_msg) in enumerate(low_avg_users, 1):
                     display_nick = nick[1:] if len(nick) > 1 else nick
+                    avg_len = round(total_length / days_passed, 1)
                     
-                    avg_msg = round(count / days_passed, 1)
-                    avg_len = round(length / days_passed, 1)
-                    
-                    msg += f"💤 {idx}위 {display_nick}\n💬 일평균 {avg_msg}개 (누적 {count}개) · ✏️ 일평균 {avg_len}자\n\n"
+                    msg += f"💀 {idx}위 {display_nick}\n💬 일평균 {round(avg_msg, 1)}개 (주간누적 {total_count}개) · ✏️ 일평균 {avg_len}자\n\n"
 
                 reply_messages.append(TextMessage(text=msg.strip()))
             else:
-                reply_messages.append(TextMessage(text="모든 유저가 주간 일평균 50회 이상을 기록 중입니다! 🎉"))
+                reply_messages.append(TextMessage(text="모든 유저가 실시간 주간 일평균 50회 이상입니다! 🎉"))
     
 ##############################################################################################
 
     # --------------------------------------------------------------------------
     # /50회이하 (메시지 수가 50회 이하인 유저 목록)
     # --------------------------------------------------------------------------
-    elif user_text == "/ㅂㅎ":
+    elif user_text == "/ㅂㅎ" or "/비활":
         if "🎪" not in user_nickname:
             reply_messages.append(TextMessage(text=f"⚠️ 권한이 없습니다. (인식된 닉네임: {user_nickname})"))
         else:
