@@ -1,32 +1,40 @@
 # ==============================================================================
 # 1. 라이브러리 및 모듈 임포트
 # ==============================================================================
+# 파이썬 표준 라이브러리 (기본 모듈)
 import os                                  # 서버 환경변수(LINE API 키 등) 로드용
-import re                                  # 정규표현식 명령어 파싱용
-import sqlite3                             # DB 연동 및 카운트/글자 수 집계용
-import random
+import re                                  # 정규표현식 명령어 파싱용 (/ㅁㄷㅅ, /마딧수, /ㅈㅅㅇ 등)
+import sqlite3                             # DB 연동 및 유저 통계 / 이미지 키워드 저장용
+import random                              # 주사위(/ㅈㅅㅇ) 기능용 랜덤 모듈
+import requests                            # ImgBB 외부 이미지 호스팅 API 전송용
 from datetime import datetime              # 최근 활동 시간(last_active) 기록용
+
+# Flask 웹 프레임워크
 from flask import Flask, request, abort   # 웹 서버 구축 및 라인 웹훅 수신용
 
-# LINE SDK v3 모듈
+# LINE Messaging API SDK v3 모듈
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import (
     ApiClient,
     Configuration,
     MessagingApi,
+    MessagingApiBlob,                      # 바이너리 이미지 다운로드용
     ReplyMessageRequest,
     TextMessage,
-    ImageMessage,
+    ImageMessage,                          # 이미지 답장 전송용
     StickerMessage
 )
 from linebot.v3.webhooks import (
     MessageEvent, 
     TextMessageContent, 
-    MemberJoinedEvent, 
-    MemberLeftEvent
+    ImageMessageContent,                   # 유저가 업로드한 이미지 이벤트 처리용
+    MemberJoinedEvent,                     # 멤버 입장 스캔용
+    MemberLeftEvent                        # 멤버 퇴장 자동 삭제용
 )
-from apscheduler.schedulers.background import BackgroundScheduler  # 자정 리셋 스케줄러
+
+# APScheduler (자정 리셋 스케줄러)
+from apscheduler.schedulers.background import BackgroundScheduler  # 자정(00:00 KST) 데이터 정제용
 
 # ==============================================================================
 # 2. Flask 서버 및 LINE API 설정
@@ -233,7 +241,7 @@ def handle_message(event):
     # 1) /ㅈㅅㅇ (단독 입력 시: 1~6 무작위 추출)
     elif user_text == "/ㅈㅅㅇ":
         dice_num = random.randint(1, 6)
-        reply_messages.append(TextMessage(text=f"🎲 주사위 결과: {dice_num} (1~6)"))
+        reply_messages.append(TextMessage(text=f"🎲 주사위 결과: {dice_num}"))
 
     # 2) /ㅈㅅㅇ [숫자] (지정한 범위: 1~N 무작위 추출)
     elif re.match(r"^/ㅈㅅㅇ\s+\d+$", user_text):
@@ -255,6 +263,67 @@ def handle_message(event):
                     messages=reply_messages
                 )
             )
+###################################################################################################################
+    # --------------------------------------------------------------------------
+    # 1. 이미지 키워드 단독 입력 시 즉시 전송
+    # --------------------------------------------------------------------------
+    conn = sqlite3.connect('chat_stats.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT image_url FROM bot_images WHERE keyword = ?", (user_text,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if row:
+        image_url = row[0]
+        reply_messages.append(
+            ImageMessage(
+                originalContentUrl=image_url,
+                previewImageUrl=image_url
+            )
+        )
+
+    # --------------------------------------------------------------------------
+    # 2. /이미지등록 [키워드] (🎪 이모지 권한 필요)
+    # --------------------------------------------------------------------------
+    elif user_text.startswith("/이미지등록 "):
+        if "🎪" not in user_nickname:
+            reply_messages.append(TextMessage(text=f"⚠️ 권한이 없습니다. (인식된 닉네임: {user_nickname})"))
+        else:
+            keyword = user_text.split(" ", 1)[1].strip()
+            if not keyword:
+                reply_messages.append(TextMessage(text="⚠️ 키워드를 입력해주세요. (예: /이미지등록 강아지)"))
+            else:
+                PENDING_KEYWORD = keyword
+                reply_messages.append(TextMessage(text=f"📸 '{keyword}' 키워드로 저장할 이미지를 지금 바로 올려주세요!"))
+
+    # --------------------------------------------------------------------------
+    # 3. /이미지삭제 [키워드] (🎪 이모지 권한 필요)
+    # --------------------------------------------------------------------------
+    elif user_text.startswith("/이미지삭제 "):
+        if "🎪" not in user_nickname:
+            reply_messages.append(TextMessage(text=f"⚠️ 권한이 없습니다. (인식된 닉네임: {user_nickname})"))
+        else:
+            keyword = user_text.split(" ", 1)[1].strip()
+            if not keyword:
+                reply_messages.append(TextMessage(text="⚠️ 삭제할 키워드를 입력해주세요. (예: /이미지삭제 강아지)"))
+            else:
+                conn = sqlite3.connect('chat_stats.db')
+                cursor = conn.cursor()
+                
+                # 1) 해당 키워드가 존재하는지 확인
+                cursor.execute("SELECT keyword FROM bot_images WHERE keyword = ?", (keyword,))
+                exists = cursor.fetchone()
+                
+                if exists:
+                    # 2) DB에서 레코드 삭제
+                    cursor.execute("DELETE FROM bot_images WHERE keyword = ?", (keyword,))
+                    conn.commit()
+                    reply_messages.append(TextMessage(text=f"🗑️ '{keyword}' 키워드의 이미지가 성공적으로 삭제되었습니다."))
+                else:
+                    reply_messages.append(TextMessage(text=f"⚠️ '{keyword}' 키워드로 등록된 이미지가 없습니다."))
+                
+                conn.close()
+
 
 # ==============================================================================
 # 6. 서버 실행
