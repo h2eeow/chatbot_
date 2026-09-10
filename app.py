@@ -454,14 +454,6 @@ ex) 셀카(눈 빼고 모자이크 가능), 몸사진(손, 가슴, 팔, 다리 �
                     rank_prefix = medals[idx - 1] if idx <= 3 else f"{idx}위"
                     msg += f"{rank_prefix} {display_nick}\n💬 {count}개 · ✏️ {length}자\n\n"
 
-                msg += "───────────────────\n\n"
-
-                # 2. 하위 유저 출력 (해골 이모지 적용)
-                msg += f"💤 조용한 사람 (하위 {n}명)\n\n"
-                for idx, (nick, count, length) in enumerate(bottom_users, 1):
-                    display_nick = nick[1:] if len(nick) > 1 else nick
-                    msg += f"💀 {idx}위 {display_nick}\n💬 {count}개 · ✏️ {length}자\n\n"
-
                 reply_messages.append(TextMessage(text=msg.strip()))
             else:
                 reply_messages.append(TextMessage(text="오늘 집계된 기록이 없습니다."))
