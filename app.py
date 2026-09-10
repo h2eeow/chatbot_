@@ -458,23 +458,26 @@ ex) 셀카(눈 빼고 모자이크 가능), 몸사진(손, 가슴, 팔, 다리 �
             else:
                 reply_messages.append(TextMessage(text="오늘 집계된 기록이 없습니다."))
                 
-    # --------------------------------------------------------------------------
+       # --------------------------------------------------------------------------
     # /내기록 (자신의 메시지 수 및 총 글자 수 확인)
     # --------------------------------------------------------------------------
     elif user_text == "/내기록":
         conn = sqlite3.connect('chat_stats.db')
         cursor = conn.cursor()
-        cursor.execute("SELECT msg_count, text_len FROM user_stats WHERE user_id = ?", (user_id,))
+        
+        # user_id로 조회하고, DB 컬럼명인 talk_length를 사용합니다.
+        cursor.execute("SELECT nickname, msg_count, talk_length FROM user_stats WHERE user_id = ?", (user_id,))
         row = cursor.fetchone()
         conn.close()
 
         if row:
-            msg_count, text_len = row
+            nick, msg_count, talk_len = row
+            display_nick = nick[1:] if len(nick) > 1 else nick  # 닉네임 앞자리 마스킹 처리 유지 시
             reply_messages.append(
-                TextMessage(text=f"📊 {user_nickname}님의 소통 기록\n\n💬: {msg_count}개\n✏️: {text_len}자")
+                TextMessage(text=f"📊 {display_nick}님의 소통 기록\n\n💬: {msg_count}개\n✏️: {talk_len}자")
             )
         else:
-            reply_messages.append(TextMessage(text=" 아직 집계된 기록이 없습니다."))
+            reply_messages.append(TextMessage(text="⚠️ 아직 집계된 기록이 없습니다. 메시지를 작성해보세요!"))
     
 
 ##############################################################################################
