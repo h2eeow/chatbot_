@@ -1,36 +1,25 @@
 # ==============================================================================
 # 1. 라이브러리 및 모듈 임포트
 # ==============================================================================
-import os  # 서버 환경변수(보안 토큰 등) 접근용 모듈
-from flask import Flask, request, abort  # 파이썬 웹 프레임워크 및 요청 처리
+import os  # 서버 환경변수 접근용 모듈
 import re
 import sqlite3
 from datetime import datetime, timedelta
 from flask import Flask, request, abort
 
+# LINE SDK v3 모듈
 from linebot.v3 import WebhookHandler
+from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.messaging import (
     ApiClient,
     Configuration,
     MessagingApi,
     ReplyMessageRequest,
-    TextMessage
+    TextMessage,
+    ImageMessage,
+    StickerMessage
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
-
-# LINE SDK에서 메시지 수신/검증/전송에 필요한 클래스 가져오기
-from linebot.v3 import WebhookHandler  # 보안 서명 검증 클래스
-from linebot.v3.exceptions import InvalidSignatureError  # 서명 에러 처리
-from linebot.v3.messaging import (
-    Configuration,       # API 설정 클래스
-    ApiClient,           # 라인 서버 통신 클라이언트
-    MessagingApi,        # 메시지 전송 API 클래스
-    ReplyMessageRequest, # 답장 요청 데이터 구조
-    TextMessage,         # 텍스트 메시지 객체
-    ImageMessage,        # 이미지 메시지 객체
-    StickerMessage       # 스티커(이모티콘) 메시지 객체
-)
-from linebot.v3.webhooks import MessageEvent, TextMessageContent  # 웹훅 이벤트 구조
 
 # ==============================================================================
 # 2. Flask 서버 및 LINE API 설정
@@ -45,7 +34,69 @@ configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)  # API 토큰 �
 handler = WebhookHandler(CHANNEL_SECRET)                          # 서명 검증기 설정
 
 # ==============================================================================
-# 3. LINE 웹훅 수신 경로 (/callback)
+# 3. SQLite 데이터베이스 함수 정의
+# ==============================================================================
+def init_db():
+    """서버 시작 시 DB 및 테이블 자동 생성"""
+    conn = sqlite3.connect('chat_stats.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS chat_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT,
+            timestamp DATETIME
+        )
+    ''')
+    conn.commit()
+    conn.close()
+
+init_db()  # 앱 실행 시 DB 초기화
+
+def log_message(user_id):
+    """수신된 메시지를 DB에 기록"""
+    conn = sqlite3.connect('chat_stats.db')
+    cursor = conn.cursor()
+    cursor.execute('INSERT INTO chat_logs (user_id, timestamp) VALUES (?, ?)', 
+                   (user_id, datetime.now()))
+    conn.commit()
+    conn.close()
+
+def get_top_users(limit=5):
+    """최근 24시간 메시지 상위 N명 조회"""
+    conn = sqlite3.connect('chat_stats.db')
+    cursor = conn.cursor()
+    time_24h_ago = datetime.now() - timedelta(hours=24)
+    cursor.execute('''
+        SELECT user_id, COUNT(*) as msg_count 
+        FROM chat_logs 
+        WHERE timestamp >= ? 
+        GROUP BY user_id 
+        ORDER BY msg_count DESC 
+        LIMIT ?
+    ''', (time_24h_ago, limit))
+    results = cursor.fetchall()
+    conn.close()
+    return results
+
+def get_bottom_users(limit=5):
+    """최근 24시간 메시지 하위 N명 조회"""
+    conn = sqlite3.connect('chat_stats.db')
+    cursor = conn.cursor()
+    time_24h_ago = datetime.now() - timedelta(hours=24)
+    cursor.execute('''
+        SELECT user_id, COUNT(*) as msg_count 
+        FROM chat_logs 
+        WHERE timestamp >= ? 
+        GROUP BY user_id 
+        ORDER BY msg_count ASC 
+        LIMIT ?
+    ''', (time_24h_ago, limit))
+    results = cursor.fetchall()
+    conn.close()
+    return results
+    
+# ==============================================================================
+# 4. LINE 웹훅 수신 경로 (/callback)
 # ==============================================================================
 @app.route("/callback", methods=['POST'])
 def callback():
@@ -59,7 +110,7 @@ def callback():
     return 'OK'     # 라인 서버에 정상 수신 알림
 
 # ==============================================================================
-# 4. 키워드별 자동응답 메시지 처리
+# 5. 키워드별 자동응답 메시지 처리
 # ==============================================================================
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
@@ -211,49 +262,44 @@ ex) 셀카(눈 빼고 모자이크 가능), 몸사진(손, 가슴, 팔, 다리 �
 
 #############################################################################################################################
 
-    # [/ㅁㄷㅅ 숫자] 형태 명령어 처리 (예: /ㅁㄷㅅ 10, /ㅁㄷㅅ 5)
+     # [/ㅁㄷㅅ 숫자] 형태 명령어 처리
     elif re.match(r"^/ㅁㄷㅅ\s+\d+$", user_text):
-        # 1. 명령어를 입력한 유저의 프로필(닉네임) 가져오기
         user_nickname = "사용자"
         try:
             with ApiClient(configuration) as api_client:
                 line_bot_api = MessagingApi(api_client)
                 
-                # 그룹방에서 입력한 경우
+                # 그룹방 / 1:1 대화 분기 처리
                 if event.source.type == "group":
-                    profile = line_bot_api.get_group_member_profile(event.source.group_id, user_id)
-                # 1:1 개인 채팅에서 입력한 경우
+                    try:
+                        profile = line_bot_api.get_group_member_profile(event.source.group_id, user_id)
+                        user_nickname = profile.display_name
+                    except Exception:
+                        profile = line_bot_api.get_profile(user_id)
+                        user_nickname = profile.display_name
                 else:
                     profile = line_bot_api.get_profile(user_id)
-                
-                user_nickname = profile.display_name
+                    user_nickname = profile.display_name
         except Exception as e:
             print(f"프로필 조회 실패: {e}")
 
-        # 2. 닉네임에 특정 이모지 '🎪'가 포함되어 있는지 권한 확인
+        # 🎪 이모지 권한 확인
         if "🎪" not in user_nickname:
-            # 이모지가 없는 유저는 거부 (필요 시 권한 없음 메시지를 넣거나 아예 무응답 처리)
-            reply_messages.append(TextMessage(text=f"{user_nickname}"))
-            pass  # 반응 없이 무시
-
+            # 💡 테스트용: 권한 거부 시 현재 인식된 닉네임을 출력해서 알려줌
+            reply_messages.append(TextMessage(text=f"⚠️ 권한 없음 (인식된 닉네임: {user_nickname})"))
         else:
-            # 3. 권한이 확인된 경우: 명령어 뒤의 숫자 추출 및 랭킹 조회
             n = int(user_text.split()[1])
-
             top_users = get_top_users(limit=n)
             bottom_users = get_bottom_users(limit=n)
 
             if top_users:
-                # --- 상위 N명 출력 작성 ---
                 msg = f"🏆 최근 24시간 소통왕 (상위 {n}명)\n"
                 for idx, (u_id, count) in enumerate(top_users, 1):
                     masked_id = u_id[:6] + "..."
                     msg += f"{idx}위: {masked_id} - {count}회\n"
 
-                # 엔터 한 번(줄바꿈) 구분선
                 msg += "\n"
 
-                # --- 하위 N명 출력 작성 ---
                 msg += f"💤 최근 24시간 조용한 사람 (하위 {n}명)\n"
                 for idx, (u_id, count) in enumerate(bottom_users, 1):
                     masked_id = u_id[:6] + "..."
