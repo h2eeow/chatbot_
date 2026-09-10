@@ -45,6 +45,8 @@ handler = WebhookHandler(CHANNEL_SECRET)
 def init_db():
     conn = sqlite3.connect('chat_stats.db')
     cursor = conn.cursor()
+    
+    # 1. 일일 통계 테이블
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS user_stats (
             user_id TEXT PRIMARY KEY,
@@ -54,6 +56,17 @@ def init_db():
             last_active DATETIME
         )
     ''')
+    
+    # 2. 주간 통계 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS weekly_user_stats (
+            user_id TEXT PRIMARY KEY,
+            nickname TEXT,
+            msg_count INTEGER DEFAULT 0,
+            talk_length INTEGER DEFAULT 0
+        )
+    ''')
+    
     conn.commit()
     conn.close()
 
@@ -93,18 +106,39 @@ def get_ranked_users(limit=5, order="DESC"):
     conn.close()
     return results
 
-def clear_db():
-    """매일 자정(00:00 KST): 유저 목록 유지, 카운트만 0으로 리셋"""
+
+from datetime import datetime
+
+def process_daily_reset():
+    """자정 실행: 일일 데이터를 주간 DB로 누적 이전 후 일일 DB 리셋"""
     conn = sqlite3.connect('chat_stats.db')
     cursor = conn.cursor()
+    
+    # 1. 일일 데이터 -> 주간 DB(weekly_user_stats)로 누적 합산 (UPSERT)
+    cursor.execute('''
+        INSERT INTO weekly_user_stats (user_id, nickname, msg_count, talk_length)
+        SELECT user_id, nickname, msg_count, talk_length FROM user_stats
+        ON CONFLICT(user_id) DO UPDATE SET
+            nickname = excluded.nickname,
+            msg_count = weekly_user_stats.msg_count + excluded.msg_count,
+            talk_length = weekly_user_stats.talk_length + excluded.talk_length
+    ''')
+    
+    # 2. 이관 완료 직후 일일 DB 카운트 0으로 초기화
     cursor.execute('UPDATE user_stats SET msg_count = 0, talk_length = 0')
+    
+    # 3. 월요일 자정(weekday() == 0)인 경우 주간 DB 초기화
+    if datetime.now().weekday() == 0:
+        cursor.execute('DELETE FROM weekly_user_stats')
+
     conn.commit()
     conn.close()
-    print("🧹 [자정 정제 완료] 유저 목록은 유지되며 카운트가 0으로 초기화되었습니다.")
+
+
 
 # 한국 시간(Asia/Seoul) 기준 매일 자정 00:00 리셋 스케줄러 실행
-scheduler = BackgroundScheduler(daemon=True, timezone="Asia/Seoul")
-scheduler.add_job(clear_db, 'cron', hour=0, minute=0)
+scheduler = BackgroundScheduler(timezone="Asia/Seoul")
+scheduler.add_job(process_daily_reset, 'cron', hour=0, minute=0)
 scheduler.start()
 
 # ==============================================================================
@@ -485,6 +519,43 @@ ex) 셀카(눈 빼고 모자이크 가능), 몸사진(손, 가슴, 팔, 다리 �
             reply_messages.append(TextMessage(text="⚠️ 아직 집계된 기록이 없습니다. 메시지를 작성해보세요!"))
     
 
+##############################################################################################
+    # --------------------------------------------------------------------------
+    # /주간평균50 (이번 주 일평균 메시지 50회 미만 유저 목록)
+    # --------------------------------------------------------------------------
+    elif user_text == "/주간평균50":
+        if "🎪" not in user_nickname:
+            reply_messages.append(TextMessage(text=f"⚠️ 권한이 없습니다. (인식된 닉네임: {user_nickname})"))
+        else:
+            # 월요일(0) -> 1일차, ..., 일요일(6) -> 7일차
+            days_passed = datetime.now().weekday() + 1
+
+            conn = sqlite3.connect('chat_stats.db')
+            cursor = conn.cursor()
+            # 주간 누적 메시지를 경과 일수로 나눈 '일평균'이 50 미만인 유저 오름차순 정렬
+            cursor.execute('''
+                SELECT nickname, msg_count, talk_length 
+                FROM weekly_user_stats 
+                WHERE (CAST(msg_count AS REAL) / ?) < 50
+                ORDER BY msg_count ASC, talk_length ASC
+            ''', (days_passed,))
+            low_avg_users = cursor.fetchall()
+            conn.close()
+
+            if low_avg_users:
+                msg = f"📉 주간 일평균 50회 미만 유저 ({days_passed}일차 기준 / {len(low_avg_users)}명)\n\n"
+                for idx, (nick, count, length) in enumerate(low_avg_users, 1):
+                    display_nick = nick[1:] if len(nick) > 1 else nick
+                    
+                    avg_msg = round(count / days_passed, 1)
+                    avg_len = round(length / days_passed, 1)
+                    
+                    msg += f"💤 {idx}위 {display_nick}\n💬 일평균 {avg_msg}개 (누적 {count}개) · ✏️ 일평균 {avg_len}자\n\n"
+
+                reply_messages.append(TextMessage(text=msg.strip()))
+            else:
+                reply_messages.append(TextMessage(text="모든 유저가 주간 일평균 50회 이상을 기록 중입니다! 🎉"))
+    
 ##############################################################################################
 
     # --------------------------------------------------------------------------
