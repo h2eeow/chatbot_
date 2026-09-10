@@ -197,7 +197,7 @@ def handle_message(event):
     current_text_len = len(user_text)
     update_user_activity(user_id, user_nickname, current_text_len)
 
-############################################################################
+#####여기부터 시작 #######################################################################
     if user_text == "안녕하이소":
         reply_messages.append(TextMessage(text="안녕하세요! 무엇을 도와드릴까요?"))
         reply_messages.append(StickerMessage(package_id="11537", sticker_id="52002734"))
@@ -205,7 +205,7 @@ def handle_message(event):
 
 
 
-############################################################################
+######마딧수 명령어######################################################################
     # 명령어: /ㅁㄷㅅ [숫자] (횟수 및 글자 수 상세 표시)
     elif re.match(r"^/ㅁㄷㅅ\s+\d+$", user_text):
         if "🎪" not in user_nickname:
@@ -237,7 +237,7 @@ def handle_message(event):
             else:
                 reply_messages.append(TextMessage(text="오늘 집계된 기록이 없습니다."))
 
-#################################################################################################
+##########주사위 #######################################################################################
     # 1) /ㅈㅅㅇ (단독 입력 시: 1~6 무작위 추출)
     elif user_text == "/ㅈㅅㅇ":
         dice_num = random.randint(1, 6)
