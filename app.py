@@ -1,10 +1,140 @@
-# ③ 텍스트 메시지 수신 및 자동응답 처리
+import os
+import re
+import random
+import sqlite3
+import requests
+from flask import Flask, request, abort
+
+from linebot.v3 import WebhookHandler
+from linebot.v3.exceptions import InvalidSignatureError
+from linebot.v3.messaging import (
+    ApiClient,
+    Configuration,
+    MessagingApi,
+    MessagingApiBlob,
+    ReplyMessageRequest,
+    TextMessage,
+    ImageMessage,
+    StickerMessage
+)
+from linebot.v3.webhooks import (
+    MessageEvent,
+    TextMessageContent,
+    ImageMessageContent
+)
+
+app = Flask(__name__)
+
+# ==============================================================================
+# 🔑 환경변수 로드
+# ==============================================================================
+CHANNEL_ACCESS_TOKEN = os.environ.get('LINE_CHANNEL_ACCESS_TOKEN')
+CHANNEL_SECRET = os.environ.get('LINE_CHANNEL_SECRET')
+IMGBB_API_KEY = os.environ.get('IMGBB_API_KEY')
+
+configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)
+handler = WebhookHandler(CHANNEL_SECRET)
+
+
+# ==============================================================================
+# 🗄️ Database 초기화
+# ==============================================================================
+def init_db():
+    conn = sqlite3.connect('chat_stats.db')
+    cursor = conn.cursor()
+    
+    # 1. 채팅 활동 집계 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS user_stats (
+            user_id TEXT PRIMARY KEY,
+            nickname TEXT,
+            msg_count INTEGER DEFAULT 0,
+            text_len INTEGER DEFAULT 0
+        )
+    ''')
+    
+    # 2. 키워드 - 이미지 URL 저장 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS bot_images (
+            keyword TEXT PRIMARY KEY,
+            image_url TEXT
+        )
+    ''')
+    
+    # 3. 이미지 업로드 대기열 테이블
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS pending_uploads (
+            user_id TEXT PRIMARY KEY,
+            keyword TEXT
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+
+init_db()
+
+
+# ==============================================================================
+# 📊 DB 헬퍼 함수
+# ==============================================================================
+def update_user_activity(user_id, nickname, text_len):
+    """유저의 메시지 수와 총 글자 수를 업데이트"""
+    conn = sqlite3.connect('chat_stats.db')
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO user_stats (user_id, nickname, msg_count, text_len)
+        VALUES (?, ?, 1, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            nickname = excluded.nickname,
+            msg_count = msg_count + 1,
+            text_len = text_len + excluded.text_len
+    ''', (user_id, nickname, text_len))
+    conn.commit()
+    conn.close()
+
+def get_ranked_users(limit=5, order="DESC"):
+    """통계 순위 조회 (DESC: 소통왕, ASC: 조용한 사람)"""
+    conn = sqlite3.connect('chat_stats.db')
+    cursor = conn.cursor()
+    query = f'''
+        SELECT nickname, msg_count, text_len 
+        FROM user_stats 
+        ORDER BY msg_count {order}, text_len {order}
+        LIMIT ?
+    '''
+    cursor.execute(query, (limit,))
+    rows = cursor.fetchall()
+    conn.close()
+    return rows
+
+
+# ==============================================================================
+# 🌐 Flask Webhook Route
+# ==============================================================================
+@app.route("/callback", methods=['POST'])
+def callback():
+    signature = request.headers.get('X-Line-Signature')
+    body = request.get_data(as_text=True)
+
+    try:
+        handler.handle(body, signature)
+    except InvalidSignatureError:
+        app.logger.info("Invalid signature. Please check your channel access token/channel secret.")
+        abort(400)
+
+    return 'OK'
+
+
+# ==============================================================================
+# 💬 텍스트 메시지 수신 및 자동응답 처리
+# ==============================================================================
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
     user_text = event.message.text.strip()
     user_id = event.source.user_id
     reply_messages = []
-    
+
     # 1. 메시지를 보낸 유저의 프로필(닉네임) 스캔
     user_nickname = "사용자"
     try:
@@ -23,13 +153,13 @@ def handle_message(event):
     except Exception as e:
         print(f"프로필 스캔 실패: {e}")
 
-    # 2. 활동 카운트 및 글자 수 업데이트 (항상 기록)
+    # 2. 활동 카운트 및 글자 수 기록
     current_text_len = len(user_text)
     update_user_activity(user_id, user_nickname, current_text_len)
 
-    # ==========================================================================
-    # 🎯 [1순위] DB 이미지 키워드 검사 (일치하면 즉시 전송 후 리턴)
-    # ==========================================================================
+    # --------------------------------------------------------------------------
+    # 🎯 [1순위] 등록된 이미지 키워드 단독 입력 시 즉시 전송 (완전 일치)
+    # --------------------------------------------------------------------------
     conn = sqlite3.connect('chat_stats.db')
     cursor = conn.cursor()
     cursor.execute("SELECT image_url FROM bot_images WHERE keyword = ?", (user_text,))
@@ -38,24 +168,27 @@ def handle_message(event):
 
     if img_row:
         image_url = img_row[0]
-        with ApiClient(configuration) as api_client:
-            line_bot_api = MessagingApi(api_client)
-            line_bot_api.reply_message(
-                ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=[
-                        ImageMessage(
-                            originalContentUrl=image_url,
-                            previewImageUrl=image_url
-                        )
-                    ]
+        try:
+            with ApiClient(configuration) as api_client:
+                line_bot_api = MessagingApi(api_client)
+                line_bot_api.reply_message(
+                    ReplyMessageRequest(
+                        reply_token=event.reply_token,
+                        messages=[
+                            ImageMessage(
+                                originalContentUrl=image_url,
+                                previewImageUrl=image_url
+                            )
+                        ]
+                    )
                 )
-            )
-        return  # 이미지를 보냈으므로 여기서 처리 종료!
+        except Exception as e:
+            print(f"❌ 이미지 전송 실패: {e}")
+        return  # 이미지 전송 후 처리 종료
 
-    # ==========================================================================
+    # --------------------------------------------------------------------------
     # 🎯 [2순위] 일반 텍스트 명령어 및 자동응답 처리
-    # ==========================================================================
+    # --------------------------------------------------------------------------
     if user_text == "안녕하이소":
         reply_messages.append(TextMessage(text="안녕하세요! 무엇을 도와드릴까요?"))
         reply_messages.append(StickerMessage(package_id="11537", sticker_id="52002734"))
@@ -91,18 +224,15 @@ def handle_message(event):
                 conn = sqlite3.connect('chat_stats.db')
                 cursor = conn.cursor()
                 cursor.execute("SELECT keyword FROM bot_images WHERE keyword = ?", (keyword,))
-                exists = cursor.fetchone()
-                
-                if exists:
+                if cursor.fetchone():
                     cursor.execute("DELETE FROM bot_images WHERE keyword = ?", (keyword,))
                     conn.commit()
                     reply_messages.append(TextMessage(text=f"🗑️ '{keyword}' 키워드의 이미지가 삭제되었습니다."))
                 else:
                     reply_messages.append(TextMessage(text=f"⚠️ '{keyword}' 키워드로 등록된 이미지가 없습니다."))
-                
                 conn.close()
 
-    # /ㅁㄷㅅ [숫자] (상세 통계)
+    # /ㅁㄷㅅ [숫자] (상세 통계 - 🎪 권한 필요)
     elif re.match(r"^/ㅁㄷㅅ\s+\d+$", user_text):
         if "🎪" not in user_nickname:
             reply_messages.append(TextMessage(text=f"⚠️ 권한이 없습니다. (인식된 닉네임: {user_nickname})"))
@@ -139,18 +269,4 @@ def handle_message(event):
     elif re.match(r"^/ㅈㅅㅇ\s+\d+$", user_text):
         max_num = int(user_text.split()[1])
         if max_num < 1:
-            reply_messages.append(TextMessage(text="⚠️ 1 이상의 숫자를 입력해주세요!"))
-        else:
-            dice_num = random.randint(1, max_num)
-            reply_messages.append(TextMessage(text=f"🎲 주사위 결과 (1~{max_num}): {dice_num}"))
-
-    # 답장 메시지가 있을 경우 전송
-    if reply_messages:
-        with ApiClient(configuration) as api_client:
-            line_bot_api = MessagingApi(api_client)
-            line_bot_api.reply_message(
-                ReplyMessageRequest(
-                    reply_token=event.reply_token,
-                    messages=reply_messages
-                )
-            )
+            reply_messages.append(TextMessage(text="⚠️ 1
