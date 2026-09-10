@@ -4,6 +4,7 @@
 import os                                  # 서버 환경변수(LINE API 키 등) 로드용
 import re                                  # 정규표현식 명령어 파싱용
 import sqlite3                             # DB 연동 및 카운트/글자 수 집계용
+import random
 from datetime import datetime              # 최근 활동 시간(last_active) 기록용
 from flask import Flask, request, abort   # 웹 서버 구축 및 라인 웹훅 수신용
 
@@ -188,11 +189,15 @@ def handle_message(event):
     current_text_len = len(user_text)
     update_user_activity(user_id, user_nickname, current_text_len)
 
-    # 3. 키워드 응답 및 명령어 처리
+############################################################################
     if user_text == "안녕하이소":
         reply_messages.append(TextMessage(text="안녕하세요! 무엇을 도와드릴까요?"))
         reply_messages.append(StickerMessage(package_id="11537", sticker_id="52002734"))
 
+
+
+
+############################################################################
     # 명령어 1: /ㅁㄷㅅ [숫자] (닉네임만 표시)
     elif re.match(r"^/ㅁㄷㅅ\s+\d+$", user_text):
         if "🎪" not in user_nickname:
@@ -220,7 +225,7 @@ def handle_message(event):
     # 명령어 2: /마딧수 [숫자] (횟수 및 글자 수까지 상세 표시)
     elif re.match(r"^/마딧수\s+\d+$", user_text):
         if "🎪" not in user_nickname:
-            reply_messages.append(TextMessage(text=f"⚠️ 권한이 없습니다. (인식된 닉네임: {user_nickname})"))
+            #reply_messages.append(TextMessage(text=f"⚠️ 권한이 없습니다. (인식된 닉네임: {user_nickname})"))
         else:
             n = int(user_text.split()[1])
             top_users = get_ranked_users(limit=n, order="DESC")
@@ -241,6 +246,22 @@ def handle_message(event):
             else:
                 reply_messages.append(TextMessage(text="오늘 집계된 기록이 없습니다."))
 
+#################################################################################################
+    # 1) /ㅈㅅㅇ (단독 입력 시: 1~6 무작위 추출)
+    elif user_text == "/ㅈㅅㅇ":
+        dice_num = random.randint(1, 6)
+        reply_messages.append(TextMessage(text=f"🎲 주사위 결과: {dice_num} (1~6)"))
+
+    # 2) /ㅈㅅㅇ [숫자] (지정한 범위: 1~N 무작위 추출)
+    elif re.match(r"^/ㅈㅅㅇ\s+\d+$", user_text):
+        max_num = int(user_text.split()[1])
+        if max_num < 1:
+            reply_messages.append(TextMessage(text="⚠️ 1 이상의 숫자를 입력해주세요!"))
+        else:
+            dice_num = random.randint(1, max_num)
+            reply_messages.append(TextMessage(text=f"🎲 주사위 결과: {dice_num} (1~{max_num})"))
+
+ ###################################################################################################   
     # 4. 답장 메시지 전송
     if reply_messages:
         with ApiClient(configuration) as api_client:
