@@ -423,13 +423,7 @@ ex) 셀카(눈 빼고 모자이크 가능), 몸사진(손, 가슴, 팔, 다리 �
                     rank_prefix = medals[idx - 1] if idx <= 3 else f"{idx}위"
                     msg += f"{rank_prefix} {display_nick}\n💬 {count}개 · ✏️ {length}자\n\n"
 
-                msg += "───────────────────\n\n"
 
-                # 2. 하위 유저 출력 (해골 이모지 적용)
-                msg += f"💤 조용한 사람 (하위 {n}명)\n\n"
-                for idx, (nick, count, length) in enumerate(bottom_users, 1):
-                    display_nick = nick[1:] if len(nick) > 1 else nick
-                    msg += f"💀 {idx}위 {display_nick}\n💬 {count}개 · ✏️ {length}자\n\n"
 
                 reply_messages.append(TextMessage(text=msg.strip()))
             else:
@@ -454,6 +448,14 @@ ex) 셀카(눈 빼고 모자이크 가능), 몸사진(손, 가슴, 팔, 다리 �
                     rank_prefix = medals[idx - 1] if idx <= 3 else f"{idx}위"
                     msg += f"{rank_prefix} {display_nick}\n💬 {count}개 · ✏️ {length}자\n\n"
 
+                msg += "───────────────────\n\n"
+
+                # 2. 하위 유저 출력 (해골 이모지 적용)
+                msg += f"💤 조용한 사람 (하위 {n}명)\n\n"
+                for idx, (nick, count, length) in enumerate(bottom_users, 1):
+                    display_nick = nick[1:] if len(nick) > 1 else nick
+                    msg += f"💀 {idx}위 {display_nick}\n💬 {count}개 · ✏️ {length}자\n\n"
+                
                 reply_messages.append(TextMessage(text=msg.strip()))
             else:
                 reply_messages.append(TextMessage(text="오늘 집계된 기록이 없습니다."))
@@ -480,6 +482,38 @@ ex) 셀카(눈 빼고 모자이크 가능), 몸사진(손, 가슴, 팔, 다리 �
             reply_messages.append(TextMessage(text="⚠️ 아직 집계된 기록이 없습니다. 메시지를 작성해보세요!"))
     
 
+##############################################################################################
+
+    # --------------------------------------------------------------------------
+    # /50회이하 (메시지 수가 50회 이하인 유저 목록)
+    # --------------------------------------------------------------------------
+    elif user_text == "/50회미만":
+        if "🎪" not in user_nickname:
+            reply_messages.append(TextMessage(text=f"⚠️ 권한이 없습니다. (인식된 닉네임: {user_nickname})"))
+        else:
+            conn = sqlite3.connect('chat_stats.db')
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT nickname, msg_count, talk_length 
+                FROM user_stats 
+                WHERE msg_count < 50 
+                ORDER BY msg_count ASC, talk_length ASC
+            ''')
+            low_users = cursor.fetchall()
+            conn.close()
+
+            if low_users:
+                msg = f"📉 메시지 50회 미만 유저 ({len(low_users)}명)\n\n"
+                for idx, (nick, count, length) in enumerate(low_users, 1):
+                    display_nick = nick[1:] if len(nick) > 1 else nick
+                    status_str = "🔇 활동 없음" if count == 0 else f"💬 {count}개 · ✏️ {length}자"
+                    msg += f"💤 {idx}위 {display_nick}\n{status_str}\n\n"
+
+                reply_messages.append(TextMessage(text=msg.strip()))
+            else:
+                reply_messages.append(TextMessage(text="모든 유저가 메시지 50회 초과 달성 상태입니다! 🎉"))
+
+    
 ##############################################################################################
     # 4. 답장 메시지 전송
     if reply_messages:
