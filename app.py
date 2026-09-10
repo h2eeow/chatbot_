@@ -220,7 +220,7 @@ ex) 셀카(눈 빼고 모자이크 가능), 몸사진(손, 가슴, 팔, 다리 �
         # 2. 닉네임에 특정 이모지 '🎪'가 포함되어 있는지 권한 확인
         if "🎪" not in user_nickname:
             # 이모지가 없는 유저는 거부 (필요 시 권한 없음 메시지를 넣거나 아예 무응답 처리)
-            reply_messages.append(TextMessage(text="⚠️ 이 명령어를 사용할 권한이 없습니다. (닉네임에 🎪 필요)"))
+            reply_messages.append(TextMessage(text=f"{user_nickname}"))
             pass  # 반응 없이 무시
 
         else:
