@@ -107,29 +107,30 @@ def get_ranked_users(limit=5, order="DESC"):
     return results
 
 
-from datetime import datetime
-
 def process_daily_reset():
-    """자정 실행: 일일 데이터를 주간 DB로 누적 이전 후 일일 DB 리셋"""
+    """자정 실행: 일일 데이터를 주간 DB로 누적 이전 (days_passed +1) 후 일일 DB 리셋"""
     conn = sqlite3.connect('chat_stats.db')
     cursor = conn.cursor()
     
-    # 1. 일일 데이터 -> 주간 DB(weekly_user_stats)로 누적 합산 (UPSERT)
+    # 1. 일일 데이터 -> 주간 DB로 누적 합산 및 days_passed +1
     cursor.execute('''
-        INSERT INTO weekly_user_stats (user_id, nickname, msg_count, talk_length)
-        SELECT user_id, nickname, msg_count, talk_length FROM user_stats
+        INSERT INTO weekly_user_stats (user_id, nickname, msg_count, talk_length, days_passed)
+        SELECT user_id, nickname, msg_count, talk_length, 1 FROM user_stats
         ON CONFLICT(user_id) DO UPDATE SET
             nickname = excluded.nickname,
             msg_count = weekly_user_stats.msg_count + excluded.msg_count,
-            talk_length = weekly_user_stats.talk_length + excluded.talk_length
+            talk_length = weekly_user_stats.talk_length + excluded.talk_length,
+            days_passed = weekly_user_stats.days_passed + 1
     ''')
     
-    # 2. 이관 완료 직후 일일 DB 카운트 0으로 초기화
+    # 2. 일일 DB 카운트 0으로 초기화
     cursor.execute('UPDATE user_stats SET msg_count = 0, talk_length = 0')
+    print(f"🧹 [{datetime.now().strftime('%Y-%m-%d %H:%M')}] 일일 데이터 이관 및 days_passed 카운트 증가 완료")
     
     # 3. 월요일 자정(weekday() == 0)인 경우 주간 DB 초기화
     if datetime.now().weekday() == 0:
         cursor.execute('DELETE FROM weekly_user_stats')
+        print("🗓️ [월요일 자정 정산] 새로운 주를 시작하기 위해 주간 DB를 초기화했습니다.")
 
     conn.commit()
     conn.close()
