@@ -160,6 +160,81 @@ def handle_member_left(event):
     conn.commit()
     conn.close()
 
+##########################이미지저장 이벤트
+@handler.add(MessageEvent, message=ImageMessageContent)
+def handle_image_message(event):
+    user_id = event.source.user_id
+
+    # 대기열에 등록된 키워드가 있는지 확인
+    conn = sqlite3.connect('chat_stats.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT keyword FROM pending_uploads WHERE user_id = ?", (user_id,))
+    row = cursor.fetchone()
+
+    if not row:
+        conn.close()
+        return  # 명령어 입력 없이 올린 일반 이미지는 무시
+
+    keyword = row[0]
+    cursor.execute("DELETE FROM pending_uploads WHERE user_id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+    message_id = event.message.id
+    reply_text = ""
+
+    try:
+        # 1. LINE 서버에서 이미지 파일 가져오기
+        with ApiClient(configuration) as api_client:
+            line_bot_blob_api = MessagingApiBlob(api_client)
+            image_bytes = line_bot_blob_api.get_message_content(message_id)
+
+        # 2. Render 환경변수의 IMGBB_API_KEY로 업로드
+        imgbb_key = os.environ.get("IMGBB_API_KEY")
+        if not imgbb_key:
+            reply_text = "❌ Render 환경변수(IMGBB_API_KEY)가 설정되지 않았습니다."
+        else:
+            res = requests.post(
+                f"https://api.imgbb.com/1/upload?key={imgbb_key}",
+                files={"image": image_bytes}
+            )
+            result = res.json()
+
+            if result.get("success"):
+                # LINE 규격에 호환되는 이미지 직링크 추출 (display_url)
+                direct_url = result["data"].get("display_url") or result["data"].get("url")
+
+                # DB 저장
+                conn = sqlite3.connect('chat_stats.db')
+                cursor = conn.cursor()
+                cursor.execute('''
+                    INSERT INTO bot_images (keyword, image_url) VALUES (?, ?)
+                    ON CONFLICT(keyword) DO UPDATE SET image_url = excluded.image_url
+                ''', (keyword, direct_url))
+                conn.commit()
+                conn.close()
+
+                reply_text = f"✅ '{keyword}' 키워드로 이미지가 저장되었습니다!"
+            else:
+                reply_text = "❌ ImgBB 업로드 실패"
+
+    except Exception as e:
+        reply_text = f"❌ 오류 발생: {str(e)}"
+
+    # 답변 전송
+    with ApiClient(configuration) as api_client:
+        line_bot_api = MessagingApi(api_client)
+        line_bot_api.reply_message(
+            ReplyMessageRequest(
+                reply_token=event.reply_token,
+                messages=[TextMessage(text=reply_text)]
+            )
+        )
+
+#############################################################################
+
+
+
 # ③ 메시지 수신 및 자동응답 처리
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_message(event):
@@ -294,6 +369,57 @@ def handle_message(event):
 
 ######################################################################################################
 
+    # --------------------------------------------------------------------------
+    # 이미지 전송 (등록된 키워드 입력 시)
+    # --------------------------------------------------------------------------
+    elif user_text in [row[0] for row in sqlite3.connect('chat_stats.db').cursor().execute("SELECT keyword FROM bot_images").fetchall()]:
+        conn = sqlite3.connect('chat_stats.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT image_url FROM bot_images WHERE keyword = ?", (user_text,))
+        img_url = cursor.fetchone()[0]
+        conn.close()
+
+        reply_messages.append(
+            ImageMessage(originalContentUrl=img_url, previewImageUrl=img_url)
+        )
+
+    # --------------------------------------------------------------------------
+    # /이미지등록 [키워드] (등록 준비 상태로 전환)
+    # --------------------------------------------------------------------------
+    elif user_text.startswith("/이미지등록 "):
+        keyword = user_text.split(" ", 1)[1].strip()
+        if not keyword:
+            reply_messages.append(TextMessage(text="⚠️ 키워드를 입력해주세요. (예: /이미지등록 강아지)"))
+        else:
+            conn = sqlite3.connect('chat_stats.db')
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO pending_uploads (user_id, keyword) VALUES (?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET keyword = excluded.keyword
+            ''', (user_id, keyword))
+            conn.commit()
+            conn.close()
+            reply_messages.append(TextMessage(text=f"📸 '{keyword}' 키워드로 저장할 이미지를 올려주세요!"))
+
+    # --------------------------------------------------------------------------
+    # /이미지삭제 [키워드]
+    # --------------------------------------------------------------------------
+    elif user_text.startswith("/이미지삭제 "):
+        keyword = user_text.split(" ", 1)[1].strip()
+        conn = sqlite3.connect('chat_stats.db')
+        cursor = conn.cursor()
+        cursor.execute("SELECT keyword FROM bot_images WHERE keyword = ?", (keyword,))
+        if cursor.fetchone():
+            cursor.execute("DELETE FROM bot_images WHERE keyword = ?", (keyword,))
+            conn.commit()
+            reply_messages.append(TextMessage(text=f"🗑️ '{keyword}' 이미지가 삭제되었습니다."))
+        else:
+            reply_messages.append(TextMessage(text=f"⚠️ '{keyword}'(으)로 등록된 이미지가 없습니다."))
+        conn.close()
+    
+    
+    
+##############################################################################################
     # 4. 답장 메시지 전송
     if reply_messages:
         with ApiClient(configuration) as api_client:
