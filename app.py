@@ -476,7 +476,7 @@ ex) 셀카(눈 빼고 모자이크 가능), 몸사진(손, 가슴, 팔, 다리 �
             nick, msg_count, talk_len = row
             display_nick = nick[1:] if len(nick) > 1 else nick  # 닉네임 앞자리 마스킹 처리 유지 시
             reply_messages.append(
-                TextMessage(text=f"📊 {display_nick}님의 소통 기록\n\n💬: {msg_count}개\n✏️: {talk_len}자")
+                TextMessage(text=f"📊 {display_nick}님의 소통 기록\n\n💬: {msg_count}개)#\n✏️: {talk_len}자")
             )
         else:
             reply_messages.append(TextMessage(text="⚠️ 아직 집계된 기록이 없습니다. 메시지를 작성해보세요!"))
