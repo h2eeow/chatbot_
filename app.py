@@ -193,6 +193,63 @@ ex) 셀카(눈 빼고 모자이크 가능), 몸사진(손, 가슴, 팔, 다리 �
 
 
 
+
+
+#############################################################################################################################
+
+    # [/ㅁㄷㅅ 숫자] 형태 명령어 처리 (예: /ㅁㄷㅅ 10, /ㅁㄷㅅ 5)
+    elif re.match(r"^/ㅁㄷㅅ\s+\d+$", user_text):
+        # 1. 명령어를 입력한 유저의 프로필(닉네임) 가져오기
+        user_nickname = "사용자"
+        try:
+            with ApiClient(configuration) as api_client:
+                line_bot_api = MessagingApi(api_client)
+                
+                # 그룹방에서 입력한 경우
+                if event.source.type == "group":
+                    profile = line_bot_api.get_group_member_profile(event.source.group_id, user_id)
+                # 1:1 개인 채팅에서 입력한 경우
+                else:
+                    profile = line_bot_api.get_profile(user_id)
+                
+                user_nickname = profile.display_name
+        except Exception as e:
+            print(f"프로필 조회 실패: {e}")
+
+        # 2. 닉네임에 특정 이모지 '🎪'가 포함되어 있는지 권한 확인
+        if "🎪" not in user_nickname:
+            # 이모지가 없는 유저는 거부 (필요 시 권한 없음 메시지를 넣거나 아예 무응답 처리)
+            # reply_messages.append(TextMessage(text="⚠️ 이 명령어를 사용할 권한이 없습니다. (닉네임에 🎪 필요)"))
+            pass  # 반응 없이 무시
+
+        else:
+            # 3. 권한이 확인된 경우: 명령어 뒤의 숫자 추출 및 랭킹 조회
+            n = int(user_text.split()[1])
+
+            top_users = get_top_users(limit=n)
+            bottom_users = get_bottom_users(limit=n)
+
+            if top_users:
+                # --- 상위 N명 출력 작성 ---
+                msg = f"🏆 최근 24시간 소통왕 (상위 {n}명)\n"
+                for idx, (u_id, count) in enumerate(top_users, 1):
+                    masked_id = u_id[:6] + "..."
+                    msg += f"{idx}위: {masked_id} - {count}회\n"
+
+                # 엔터 한 번(줄바꿈) 구분선
+                msg += "\n"
+
+                # --- 하위 N명 출력 작성 ---
+                msg += f"💤 최근 24시간 조용한 사람 (하위 {n}명)\n"
+                for idx, (u_id, count) in enumerate(bottom_users, 1):
+                    masked_id = u_id[:6] + "..."
+                    msg += f"{idx}위: {masked_id} - {count}회\n"
+
+                reply_messages.append(TextMessage(text=msg.strip()))
+            else:
+                reply_messages.append(TextMessage(text="최근 24시간 동안 집계된 메시지 기록이 없습니다."))
+
+###############################################################################################################
     
     # 라인 서버로 답장 보내기
     with ApiClient(configuration) as api_client:
@@ -203,6 +260,7 @@ ex) 셀카(눈 빼고 모자이크 가능), 몸사진(손, 가슴, 팔, 다리 �
                 messages=reply_messages         # 응답할 메시지 배열
             )
         )
+
 
 # ==============================================================================
 # 5. 서버 실행
