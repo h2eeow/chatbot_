@@ -521,65 +521,6 @@ ex) 셀카(눈 빼고 모자이크 가능), 몸사진(손, 가슴, 팔, 다리 �
     
 
 ##############################################################################################
-    # --------------------------------------------------------------------------
-    # /주간비활 (유저별 개별 days 기준 실시간 일평균 50회 미만 유저)
-    # --------------------------------------------------------------------------
-    elif user_text == "/ㅈㄱㅂㅎ":
-        if "🎪" not in user_nickname:
-            reply_messages.append(TextMessage(text=f"⚠️ 권한이 없습니다. (인식된 닉네임: {user_nickname})"))
-        else:
-            conn = sqlite3.connect('chat_stats.db')
-            cursor = conn.cursor()
-            
-            # 주간 DB(w) 중심 기준 + 오늘 일간 DB(u)에만 있는 유저도 유니온(UNION)으로 모두 합산
-            cursor.execute('''
-                SELECT 
-                    COALESCE(w.user_id, u.user_id) AS user_id,
-                    COALESCE(w.nickname, u.nickname) AS nickname,
-                    COALESCE(w.msg_count, 0) + COALESCE(u.msg_count, 0) AS total_msg,
-                    COALESCE(w.talk_length, 0) + COALESCE(u.talk_length, 0) AS total_len,
-                    COALESCE(w.days_passed, 0) AS user_days
-                FROM weekly_user_stats w
-                LEFT JOIN user_stats u ON w.user_id = u.user_id
-                
-                UNION
-                
-                SELECT 
-                    u.user_id,
-                    u.nickname,
-                    u.msg_count AS total_msg,
-                    u.talk_length AS total_len,
-                    0 AS user_days
-                FROM user_stats u
-                WHERE u.user_id NOT IN (SELECT user_id FROM weekly_user_stats)
-            ''')
-            all_users = cursor.fetchall()
-            conn.close()
-
-            low_avg_users = []
-            for user_id, nick, total_count, total_length, user_days in all_users:
-                # 각 유저 개별 기준: (주간 DB 정산 횟수 + 오늘 1일)
-                effective_days = user_days + 1
-                avg_count = total_count / effective_days
-                
-                if avg_count < 50:
-                    low_avg_users.append((nick, total_count, total_length, avg_count, effective_days))
-
-            # 메시지 적은 순 -> 글자수 적은 순 정렬
-            low_avg_users.sort(key=lambda x: (x[3], x[2]))
-
-            if low_avg_users:
-                msg = f"📉 주간 일평균 50회 미만 유저 ({len(low_avg_users)}명)\n\n"
-                for idx, (nick, total_count, total_length, avg_msg, effective_days) in enumerate(low_avg_users, 1):
-                    display_nick = nick[1:] if len(nick) > 1 else nick
-                    avg_len = round(total_length / effective_days, 1)
-                    
-                    msg += f"💀 {idx}위 {display_nick}\n💬 일평균 {round(avg_msg, 1)}개 (누적 {total_count}개/{effective_days}일차) · ✏️ 일평균 {avg_len}자\n\n"
-
-                reply_messages.append(TextMessage(text=msg.strip()))
-            else:
-                reply_messages.append(TextMessage(text="모든 유저가 개별 활동일 기준 주간 일평균 50회 이상입니다! 🎉"))
-##############################################################################################
 
     # --------------------------------------------------------------------------
     # /50회이하 (메시지 수가 50회 이하인 유저 목록)
