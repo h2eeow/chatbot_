@@ -4,6 +4,19 @@
 import os  # 서버 환경변수(보안 토큰 등) 접근용 모듈
 from flask import Flask, request, abort  # 파이썬 웹 프레임워크 및 요청 처리
 import re
+import sqlite3
+from datetime import datetime, timedelta
+from flask import Flask, request, abort
+
+from linebot.v3 import WebhookHandler
+from linebot.v3.messaging import (
+    ApiClient,
+    Configuration,
+    MessagingApi,
+    ReplyMessageRequest,
+    TextMessage
+)
+from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
 # LINE SDK에서 메시지 수신/검증/전송에 필요한 클래스 가져오기
 from linebot.v3 import WebhookHandler  # 보안 서명 검증 클래스
