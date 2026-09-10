@@ -4,7 +4,7 @@ def handle_message(event):
     user_text = event.message.text.strip()
     user_id = event.source.user_id
     reply_messages = []
-
+    
     # 1. 메시지를 보낸 유저의 프로필(닉네임) 스캔
     user_nickname = "사용자"
     try:
