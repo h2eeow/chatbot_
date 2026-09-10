@@ -1,11 +1,11 @@
 # ==============================================================================
 # 1. 라이브러리 및 모듈 임포트
 # ==============================================================================
-import os  # 서버 환경변수 접근용 모듈
-import re
-import sqlite3
-from datetime import datetime, timedelta
-from flask import Flask, request, abort
+import os                                  # 서버 환경변수(LINE API 키 등) 로드용
+import re                                  # 정규표현식 명령어 파싱용 (/ㅁㄷㅅ [숫자])
+import sqlite3                             # DB 연동 및 카운트/글자 수 집계용
+from datetime import datetime              # 최근 활동 시간(last_active) 기록용
+from flask import Flask, request, abort   # 웹 서버 구축 및 라인 웹훅 수신용
 
 # LINE SDK v3 모듈
 from linebot.v3 import WebhookHandler
@@ -21,6 +21,8 @@ from linebot.v3.messaging import (
 )
 from linebot.v3.webhooks import MessageEvent, TextMessageContent
 
+from apscheduler.schedulers.background import BackgroundScheduler  # 모듈 추가
+
 # ==============================================================================
 # 2. Flask 서버 및 LINE API 설정
 # ==============================================================================
@@ -34,67 +36,107 @@ configuration = Configuration(access_token=CHANNEL_ACCESS_TOKEN)  # API 토큰 �
 handler = WebhookHandler(CHANNEL_SECRET)                          # 서명 검증기 설정
 
 # ==============================================================================
-# 3. SQLite 데이터베이스 함수 정의
+# 3. 데이터베이스 함수 정의
 # ==============================================================================
 def init_db():
-    """서버 시작 시 DB 및 테이블 자동 생성"""
     conn = sqlite3.connect('chat_stats.db')
     cursor = conn.cursor()
+    # 유저별 누적 횟수(msg_count) 및 누적 글자 수(talk_length) 관리
     cursor.execute('''
-        CREATE TABLE IF NOT EXISTS chat_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id TEXT,
-            timestamp DATETIME
+        CREATE TABLE IF NOT EXISTS user_stats (
+            user_id TEXT PRIMARY KEY,
+            nickname TEXT,
+            msg_count INTEGER DEFAULT 0,
+            talk_length INTEGER DEFAULT 0,
+            last_active DATETIME
         )
     ''')
     conn.commit()
     conn.close()
 
-init_db()  # 앱 실행 시 DB 초기화
+init_db()
 
-def log_message(user_id):
-    """수신된 메시지를 DB에 기록"""
+def update_user_activity(user_id, nickname, text_len):
+    """메시지 수신 시 카운트 +1 및 누적 글자 수(talk_length) ++"""
     conn = sqlite3.connect('chat_stats.db')
     cursor = conn.cursor()
-    cursor.execute('INSERT INTO chat_logs (user_id, timestamp) VALUES (?, ?)', 
-                   (user_id, datetime.now()))
+    
+    # 신규 등록 시: msg_count = 1, talk_length = text_len
+    # 기존 유저일 시: msg_count + 1, talk_length + text_len
+    cursor.execute('''
+        INSERT INTO user_stats (user_id, nickname, msg_count, talk_length, last_active)
+        VALUES (?, ?, 1, ?, ?)
+        ON CONFLICT(user_id) DO UPDATE SET
+            nickname = excluded.nickname,
+            msg_count = user_stats.msg_count + 1,
+            talk_length = user_stats.talk_length + excluded.talk_length,
+            last_active = excluded.last_active
+    ''', (user_id, nickname, text_len, datetime.now()))
+    
     conn.commit()
     conn.close()
 
-def get_top_users(limit=5):
-    """최근 24시간 메시지 상위 N명 조회"""
+def get_ranked_users(limit=5, order="DESC"):
+    """상위/하위 N명 순위 및 메시지 수, 총 글자 수 조회"""
     conn = sqlite3.connect('chat_stats.db')
     cursor = conn.cursor()
-    time_24h_ago = datetime.now() - timedelta(hours=24)
-    cursor.execute('''
-        SELECT user_id, COUNT(*) as msg_count 
-        FROM chat_logs 
-        WHERE timestamp >= ? 
-        GROUP BY user_id 
-        ORDER BY msg_count DESC 
+    
+    cursor.execute(f'''
+        SELECT nickname, msg_count, talk_length 
+        FROM user_stats 
+        ORDER BY msg_count {order} 
         LIMIT ?
-    ''', (time_24h_ago, limit))
+    ''', (limit,))
+    
     results = cursor.fetchall()
     conn.close()
     return results
 
-def get_bottom_users(limit=5):
-    """최근 24시간 메시지 하위 N명 조회"""
+@handler.add(MessageEvent, message=TextMessageContent)
+def handle_message(event):
+    user_text = event.message.text.strip()
+    user_id = event.source.user_id
+    reply_messages = []
+
+    # 1. 메시지를 보낸 유저의 프로필(닉네임) 스캔
+    user_nickname = "사용자"
+    try:
+        with ApiClient(configuration) as api_client:
+            line_bot_api = MessagingApi(api_client)
+            if event.source.type == "group":
+                try:
+                    profile = line_bot_api.get_group_member_profile(event.source.group_id, user_id)
+                    user_nickname = profile.display_name
+                except Exception:
+                    profile = line_bot_api.get_profile(user_id)
+                    user_nickname = profile.display_name
+            else:
+                profile = line_bot_api.get_profile(user_id)
+                user_nickname = profile.display_name
+    except Exception as e:
+        print(f"프로필 스캔 실패: {e}")
+
+    # 2. 누구나 말하면 DB에 닉네임 저장, 카운트+1, 입력한 글자 수 누적(+=)
+    current_text_len = len(user_text)
+    update_user_activity(user_id, user_nickname, current_text_len)
+
+
+
+def clear_db():
+    """매일 자정에 호출되어 유저 통계를 초기화하는 함수"""
     conn = sqlite3.connect('chat_stats.db')
     cursor = conn.cursor()
-    time_24h_ago = datetime.now() - timedelta(hours=24)
-    cursor.execute('''
-        SELECT user_id, COUNT(*) as msg_count 
-        FROM chat_logs 
-        WHERE timestamp >= ? 
-        GROUP BY user_id 
-        ORDER BY msg_count ASC 
-        LIMIT ?
-    ''', (time_24h_ago, limit))
-    results = cursor.fetchall()
+    cursor.execute('DELETE FROM user_stats')  # 또는 DROP TABLE user_stats 후 init_db()
+    conn.commit()
     conn.close()
-    return results
-    
+    print("🧹 [자정 정제 완료] user_stats 테이블 초기화됨.")
+
+# 자정 스케줄러 설정 (매일 00:00 실행)
+scheduler = BackgroundScheduler(daemon=True)
+scheduler.add_job(clear_db, 'cron', hour=0, minute=0)
+scheduler.start()
+
+
 # ==============================================================================
 # 4. LINE 웹훅 수신 경로 (/callback)
 # ==============================================================================
@@ -262,53 +304,34 @@ ex) 셀카(눈 빼고 모자이크 가능), 몸사진(손, 가슴, 팔, 다리 �
 
 #############################################################################################################################
 
-         # [/ㅁㄷㅅ 숫자] 형태 명령어 처리
-    elif re.match(r"^/ㅁㄷㅅ\s+\d+$", user_text):
-        user_nickname = "사용자"
-        try:
-            with ApiClient(configuration) as api_client:
-                line_bot_api = MessagingApi(api_client)
-                
-                # 그룹방 / 1:1 대화 분기 처리
-                if event.source.type == "group":
-                    try:
-                        profile = line_bot_api.get_group_member_profile(event.source.group_id, user_id)
-                        user_nickname = profile.display_name
-                    except Exception:
-                        profile = line_bot_api.get_profile(user_id)
-                        user_nickname = profile.display_name
-                else:
-                    profile = line_bot_api.get_profile(user_id)
-                    user_nickname = profile.display_name
-        except Exception as e:
-            print(f"프로필 조회 실패: {e}")
-
-        # 🎪 이모지 권한 확인
-        if "🎪" in user_nickname:
-            # 💡 테스트용: 권한 거부 시 현재 인식된 닉네임을 출력해서 알려줌
-            reply_messages.append(TextMessage(text=f"⚠️ 권한 없음 (인식된 닉네임: {user_nickname})"))
+    # --------------------------------------------------
+    # [/ㅁㄷㅅ 숫자] 명령어 처리
+    # --------------------------------------------------
+    if re.match(r"^/ㅁㄷㅅ\s+\d+$", user_text):
+        if "🎪" not in user_nickname:
+            reply_messages.append(TextMessage(text=f"⚠️ 권한이 없습니다. (인식된 닉네임: {user_nickname})"))
         else:
             n = int(user_text.split()[1])
-            top_users = get_top_users(limit=n)
-            bottom_users = get_bottom_users(limit=n)
+
+            top_users = get_ranked_users(limit=n, order="DESC")
+            bottom_users = get_bottom_users(limit=n, order="ASC") # get_ranked_users(limit=n, order="ASC") 사용 가능
 
             if top_users:
-                msg = f"🏆 최근 24시간 소통왕 (상위 {n}명)\n"
-                for idx, (u_id, count) in enumerate(top_users, 1):
-                    masked_id = u_id[:6] + "..."
-                    msg += f"{idx}위: {masked_id} - {count}회\n"
+                msg = f"🏆 소통왕 (상위 {n}명)\n"
+                for idx, (nick, count, length) in enumerate(top_users, 1):
+                    msg += f"{idx}위: {nick} - {count}회 ({length}자)\n"
 
                 msg += "\n"
 
-                msg += f"💤 최근 24시간 조용한 사람 (하위 {n}명)\n"
-                for idx, (u_id, count) in enumerate(bottom_users, 1):
-                    masked_id = u_id[:6] + "..."
-                    msg += f"{idx}위: {masked_id} - {count}회\n"
+                msg += f"💤 조용한 사람 (하위 {n}명)\n"
+                for idx, (nick, count, length) in enumerate(bottom_users, 1):
+                    msg += f"{idx}위: {nick} - {count}회 ({length}자)\n"
 
                 reply_messages.append(TextMessage(text=msg.strip()))
             else:
-                reply_messages.append(TextMessage(text="최근 24시간 동안 집계된 메시지 기록이 없습니다."))
-    
+                reply_messages.append(TextMessage(text="집계된 기록이 없습니다."))
+
+
 
 ###############################################################################################################
     
